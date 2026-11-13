@@ -16,11 +16,15 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (2026 Fixed Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (2026 Free API Fixed Edition)")
 
+# Render Paid Plan Persistent Disk လမ်းကြောင်း (/var/data/recap_jobs)
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# -------------------------------------------------------------------------
+# 13.11.2026 FREE API CONFIGURATION & AUTO-FALLBACK MODELS
+# -------------------------------------------------------------------------
 DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
@@ -47,44 +51,47 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 # -------------------------------------------------------------------------
-# MYANMAR UNICODE NORMALIZER & TEXT CLEANER (လေးထောင့်ကွက် [] နှင့် Prompt စာသားဖယ်ရှားရန်)
+# MYANMAR UNICODE NORMALIZER & TEXT CLEANER (No bad escape \u, No [] boxes)
 # -------------------------------------------------------------------------
 def clean_burmese_text(text: str) -> str:
     """
     ၁။ AI က မှားထည့်လိုက်သော Prompt ညွှန်ကြားချက်များကို ဖယ်ရှားခြင်း
-    ၂။ မြန်မာ Unicode သေးသေးတင်/တစ်ချောင်းငင် အစီအစဉ်မှား၍ [] ပေါ်ခြင်းကို ပြင်ဆင်ခြင်း
+    ၂။ မြန်မာ Unicode သေးသေးတင်/တစ်ချောင်းငင် အစီအစဉ်မှား၍ [] ပေါ်ခြင်းကို .replace() ဖြင့် ပြင်ဆင်ခြင်း
     """
     if not text:
         return ""
-    text = unicodedata.normalize("NFC", text)
-    # Remove prompt echo prefixes if any
+    text = unicodedata.normalize("NFC", str(text))
+
+    # Prompt ညွှန်ကြားချက် ပြန်ပါလာပါက ဖယ်ရှားခြင်း
     text = re.sub(
         r"^(ရင်ခုန်စရာ|သဘာဝကျသော|မြန်မာသဘာဝဖြင့်|ပြန်လည်ရေးသားပါ|Narration|Recap)[^:：]*[:：]\s*",
         "",
         text.strip(),
         flags=re.IGNORECASE,
     )
-    # Remove zero-width characters & markdown symbols that cause [] boxes in libass
-    text = re.sub(r"[\u200b\u200c\u200d\ufeff*#_`~]", "", text)
-    # Fix Myanmar Unicode vowel ordering: Anusvara (ံ U+1036) before U (ု U+102F / ူ U+1030) -> U before Anusvara
-    text = re.sub(r"\u1036(\u102f|\u1030)", r"\1\u1036", text)
-    # Fix Asat (် U+103A) + Dot below (့ U+1037) ordering
-    text = re.sub(r"\u1037\u103a", "\u103a\u1037", text)
+
+    # Zero-width characters နှင့် Markdown သင်္ကေတများကို ဖယ်ရှားခြင်း
+    for ch in ["\u200b", "\u200c", "\u200d", "\ufeff", "*", "#", "_", "`", "~", '"', "'"]:
+        text = text.replace(ch, "")
+
+    # မြန်မာသရ အစီအစဉ်မှားမှုကို .replace() ဖြင့် ပြင်ဆင်ခြင်း (bad escape \u error လုံးဝမတက်စေရန်)
+    text = text.replace("\u1036\u102f", "\u102f\u1036")
+    text = text.replace("\u1036\u1030", "\u1030\u1036")
+    text = text.replace("\u1037\u103a", "\u103a\u1037")
+
     return re.sub(r"\s+", " ", text).strip()
 
 
 def split_burmese_caption_chunks(text: str, words_per_caption: int) -> List[str]:
     """
     မြန်မာစာကြောင်းရှည်ကြီးကို စာတန်းထိုးတွင် ဖတ်ရလွယ်အောင် တစ်ကြောင်းလျှင်
-    စာလုံးရေ (Character/Syllable) အနေတော်အလိုက် သပ်သပ်ရပ်ရပ် ပိုင်းဖြတ်ပေးခြင်း
+    စာလုံးရေ အနေတော်အလိုက် သပ်သပ်ရပ်ရပ် ပိုင်းဖြတ်ပေးခြင်း
     """
     text = clean_burmese_text(text)
     if not text:
         return [""]
-    # words_per_caption = 9 ဆိုလျှင် မြန်မာစာလုံးရေ ~32 လုံးခန့် (တစ်ကြောင်းစာ အနေတော်)
-    max_chars = max(18, int(words_per_caption) * 3 + 5)
 
-    # ပုဒ်ဖြတ်၊ ပုဒ်မ နှင့် Space များမှ အရင်ခွဲထုတ်သည်
+    max_chars = max(18, int(words_per_caption) * 3 + 5)
     tokens = re.split(r"(?<=[၊။\s])", text)
     chunks: List[str] = []
     current = ""
@@ -97,11 +104,9 @@ def split_burmese_caption_chunks(text: str, words_per_caption: int) -> List[str]
         else:
             if current.strip():
                 chunks.append(current.strip())
-            # Token တစ်ခုတည်းက အရမ်းရှည်နေပါက မြန်မာအက္ခရာအလိုက် ထပ်ပိုင်းသည်
             while len(tk) > max_chars:
-                # Consonant boundary ရှာပြီး ဖြတ်သည်
                 cut = max_chars
-                while cut < len(tk) and "\u102b" <= tk[cut] <= "\u103f":
+                while cut < len(tk) and ("\u102b" <= tk[cut] <= "\u103f"):
                     cut += 1
                 chunks.append(tk[:cut].strip())
                 tk = tk[cut:]
@@ -198,7 +203,7 @@ def update_job_step(job_id: str, step_name: str, progress: int):
 
 
 # -------------------------------------------------------------------------
-# STEP 2 & 3: ASSEMBLYAI TRANSCRIBE (CHINESE / DONGHUA ACCURACY FIX)
+# STEP 2 & 3: ASSEMBLYAI TRANSCRIBE (SPEECH_MODELS ARRAY + CHINESE FALLBACK)
 # -------------------------------------------------------------------------
 async def request_assemblyai_transcript(
     client: httpx.AsyncClient,
@@ -206,10 +211,8 @@ async def request_assemblyai_transcript(
     upload_url: str,
     lang_code: Optional[str],
 ) -> Dict[str, Any]:
-    """AssemblyAI သို့ Transcript တောင်းခံပြီး ပြီးဆုံးသည်အထိ စောင့်ပေးသော helper"""
     payload: Dict[str, Any] = {
         "audio_url": upload_url,
-        # universal-2 သည် တရုတ် (zh) နှင့် အာရှဘာသာစကားများတွင် အင်္ဂလိပ်လို မှားမဖမ်းဘဲ အတိကျဆုံးဖြစ်သည်
         "speech_models": ["universal-2"],
     }
     if lang_code:
@@ -259,17 +262,13 @@ async def assemblyai_upload_and_transcribe(
 
         try:
             data = await request_assemblyai_transcript(client, headers, upload_url, chosen_lang)
-            # Auto-detect က နောက်ခံတီးလုံးကြောင့် တရုတ်ကားကို English (en) လို့ မှားဖမ်းမိပြီး confidence နည်းနေလျှင်
-            # သို့မဟုတ် စာသားအလွန်နည်းနေလျှင် Chinese (zh) ဖြင့် အလိုအလျောက် ပြန်ဖမ်းပေးသည်
             detected = data.get("language_code", "")
             conf = float(data.get("language_confidence") or 1.0)
             if chosen_lang is None and detected == "en" and conf < 0.82:
                 data = await request_assemblyai_transcript(client, headers, upload_url, "zh")
         except Exception:
-            # Threshold မပြည့်ပါက Chinese (zh) ဖြင့် တိုက်ရိုက်ပြန်ဖမ်းသည်
             data = await request_assemblyai_transcript(client, headers, upload_url, "zh")
 
-        # Words array မှ အချိန်အတိအကျဖြင့် Scene Windows (12-18s) တည်ဆောက်ခြင်း
         words = data.get("words") or []
         if words:
             sentences = []
@@ -297,7 +296,6 @@ async def assemblyai_upload_and_transcribe(
             if sentences:
                 return sentences
 
-        # Fallback if words list is empty
         return [{
             "text": data.get("text") or "",
             "start": 0,
@@ -306,8 +304,31 @@ async def assemblyai_upload_and_transcribe(
 
 
 # -------------------------------------------------------------------------
-# STEP 4: OPENROUTER NATURAL BURMESE MOVIE RECAP GENERATOR
+# STEP 4: OPENROUTER NATURAL BURMESE MOVIE RECAP (ROBUST JSON PARSER)
 # -------------------------------------------------------------------------
+def parse_ai_json_response(raw_content: str) -> Dict[str, Any]:
+    """
+    AI က ထုတ်ပေးသော JSON ထဲတွင် control characters သို့မဟုတ် newline အမှားများပါလာသော်လည်း
+    လုံးဝ Error မတက်စေဘဲ ဖတ်ယူပေးသည့် Parser
+    """
+    cleaned_raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", " ", raw_content)
+    json_match = re.search(r"\{.*\}", cleaned_raw, flags=re.DOTALL)
+    json_str = json_match.group(0) if json_match else cleaned_raw.strip()
+
+    try:
+        return json.loads(json_str, strict=False)
+    except Exception:
+        fallback_segs = []
+        pattern = r'"index"\s*:\s*(\d+)\s*,\s*"narration"\s*:\s*"([^"]+)"'
+        for m in re.finditer(pattern, cleaned_raw):
+            fallback_segs.append({"index": int(m.group(1)), "narration": m.group(2)})
+        cap_match = re.search(r'"tiktok_caption"\s*:\s*"([^"]+)"', cleaned_raw)
+        return {
+            "segments": fallback_segs,
+            "tiktok_caption": cap_match.group(1) if cap_match else "",
+        }
+
+
 async def openrouter_generate_recap(
     sentences: List[Dict[str, Any]],
     api_key: str,
@@ -319,10 +340,6 @@ async def openrouter_generate_recap(
     add_fyp: bool,
     total_video_dur: float,
 ) -> Dict[str, Any]:
-    """
-    ဗီဒီယို အစမှ အဆုံးထိ အခန်းမပြတ်တောက်စေရန် Continuous Scene Segments တည်ဆောက်ပြီး
-    သဘာဝကျသော မြန်မာ Movie Recap Narration အဖြစ် ပြောင်းလဲခြင်း
-    """
     raw_groups = []
     cur_texts = []
     seg_start = 0.0
@@ -350,7 +367,6 @@ async def openrouter_generate_recap(
             "text": " ".join(cur_texts),
         })
 
-    # ဗီဒီယို အခန်းများ လုံးဝမပြတ်တောက်စေရန် 0.0s မှ Video အဆုံးထိ Continuous Timeline ချိတ်ဆက်ခြင်း
     segments = []
     for i, grp in enumerate(raw_groups):
         win_start = 0.0 if i == 0 else raw_groups[i]["start"]
@@ -365,18 +381,17 @@ async def openrouter_generate_recap(
         })
 
     system_prompt = """You are a top-tier professional Burmese Movie & Donghua (Xianxia) Recap Narrator.
-Your job is to convert the provided transcript segments into an engaging, natural 3rd-person Burmese Movie Recap narration script.
+Convert the provided transcript segments into an engaging, natural 3rd-person Burmese Movie Recap narration script.
 
 CRITICAL RULES FOR BURMESE NARRATION:
 1. USE NATURAL SPOKEN BURMESE ONLY: End sentences naturally with "တယ်", "တာပေါ့", "လိုက်တယ်", "ခဲ့တယ်", "နေတော့တာပေါ့".
-2. NEVER USE STIFF LITERARY BURMESE: Strictly forbid using "သည်", "၏", "၌", "၎င်း", "လူကြီးမားသည်", "ပြုလုပ်နေပါသည်".
-3. NEVER ECHO INSTRUCTIONS: Do NOT write phrases like "ရင်ခုန်စရာ မြန်မာသဘာဝဖြင့် ပြန်လည်ရေးသားပါ:" or any intro labels. Output ONLY the story narration!
-4. CONTEXTUAL CORRECTION: The input transcript is from a Chinese Cultivation (Xianxia) / Drama video and may contain ASR phonetic typos. Infer the true meaning from context (e.g. Sect Master/ဂိုဏ်းချုပ်, Senior Sister/စီနီယာအစ်မ, Maid/အစေခံမလေး, Spirit Stones/ဝိညာဉ်ကျောက်တုံး, Cultivation Realm/ကျင့်ကြံခြင်းအဆင့်, System/စနစ်). NEVER output random English place names like "Arkansas" or "America".
-5. LENGTH MATCHING: Match each narration length to its `duration_sec` (approx. 3 to 4 Burmese words per second of duration).
-6. OUTPUT FORMAT: Return ONLY a valid JSON object:
+2. NEVER USE STIFF LITERARY BURMESE: Strictly forbid using "သည်", "၏", "၌", "၎င်း", "ပြုလုပ်နေပါသည်".
+3. NEVER ECHO INSTRUCTIONS: Output ONLY the story narration!
+4. CONTEXTUAL CORRECTION: The input is from a Chinese Cultivation (Xianxia) / Drama video. Use proper Burmese Xianxia terms (e.g. ဂိုဏ်းချုပ်, စီနီယာအစ်မ, အစေခံမလေး, ဝိညာဉ်ကျောက်တုံး, ကျင့်ကြံခြင်းအဆင့်, စနစ်). NEVER output random English place names like "Arkansas" or "America".
+5. LENGTH MATCHING: Match each narration length to its `duration_sec` (approx. 3 to 4 Burmese words per second).
+6. OUTPUT FORMAT: Return ONLY a valid single-line JSON object without raw newlines inside strings:
 {"segments": [{"index": 0, "narration": "..."}], "tiktok_caption": "..."}"""
 
-    # Segment အရေအတွက် များပါက 25 ခုစီ Chunk ခွဲပို့ပြီး JSON မှန်ကန်စွာ ရယူသည်
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
@@ -388,7 +403,7 @@ CRITICAL RULES FOR BURMESE NARRATION:
 
     narr_map: Dict[int, str] = {}
     tiktok_cap = "ဇာတ်လမ်းကောင်းလေးကို အဆုံးထိ အားပေးကြပါဦးနော် 🎬"
-    batch_size = 25
+    batch_size = 20
 
     async with httpx.AsyncClient(timeout=240.0) as client:
         for b_start in range(0, len(segments), batch_size):
@@ -420,31 +435,18 @@ CRITICAL RULES FOR BURMESE NARRATION:
             if not raw_content:
                 raise RuntimeError(f"OpenRouter Error: {last_error}")
 
-            # Robust JSON Cleaning to fix 'Invalid control character' error
-            cleaned_raw = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", raw_content)
-            json_match = re.search(r"\{.*\}", cleaned_raw, flags=re.DOTALL)
-            json_str = json_match.group(0) if json_match else cleaned_raw.strip()
-
-            try:
-                parsed = json.loads(json_str, strict=False)
-            except json.JSONDecodeError:
-                # Fallback: fix common quote/newline issues in AI output
-                import ast
-                try:
-                    # Try safe eval if python dict format
-                    cleaned_eval = json_str.replace("true", "True").replace("false", "False").replace("null", "None")
-                    parsed = ast.literal_eval(cleaned_eval)
-                except Exception:
-                    raise RuntimeError(f"AI က တရားဝင် JSON format မဟုတ်သော စာသားထုတ်ပေးပါသည်: {json_str[:200]}...")
+            parsed = parse_ai_json_response(raw_content)
 
             for item in parsed.get("segments", []):
-                narr_map[int(item["index"])] = clean_burmese_text(item.get("narration", ""))
+                if "index" in item and "narration" in item:
+                    narr_map[int(item["index"])] = clean_burmese_text(item["narration"])
             if parsed.get("tiktok_caption"):
                 tiktok_cap = clean_burmese_text(parsed["tiktok_caption"])
 
-
     for seg in segments:
         seg["narration"] = narr_map.get(seg["index"]) or clean_burmese_text(seg["text"])
+        if not seg["narration"]:
+            seg["narration"] = "ဒီလိုနဲ့ ဇာတ်လမ်းလေးက ဆက်ပြီး ဖြစ်ပေါ်လာခဲ့တာပေါ့။"
 
     caption_out = ""
     if want_hashtags:
@@ -466,7 +468,6 @@ def build_ass_subtitles(
     play_res_y: int,
     ass_path: Path,
 ):
-    # Noto Sans Myanmar သို့မဟုတ် Padauk ကို သုံးခြင်းဖြင့် မြန်မာစာ [] လုံးဝမပေါ်စေပါ
     req_font = cfg.get("font", "Noto Sans Myanmar")
     font_name = "Padauk" if req_font == "Padauk" else "Noto Sans Myanmar"
     font_size = int(cfg.get("text_size", 30))
@@ -619,7 +620,6 @@ async def process_recap_pipeline(
             concat_v_list.append(v_seg_path)
             concat_a_list.append(seg["tts_file"])
 
-            # မြန်မာစာကြောင်းကို တစ်ကြောင်းစာ အနေတော်အလိုက် အချိန်အတိအကျ ပိုင်းဖြတ်ခြင်း
             chunks = split_burmese_caption_chunks(seg["narration"], words_per_cap)
             total_chars = max(1, sum(len(c) for c in chunks))
             cur_offset = 0.0
@@ -707,7 +707,7 @@ async def process_recap_pipeline(
         else:
             vf_filters.append(f"scale={out_w}:{out_h}")
 
-        # မူရင်း တရုတ်စာတန်းထိုးများ မြန်မာစာတန်းထိုးအောက်တွင် မရှုပ်နေစေရန် အောက်ခြေ Subtitle နေရာကို သဘာဝကျကျ Blur ဝါးပေးခြင်း
+        # မူရင်း တရုတ်စာတန်းထိုးများကို အလိုအလျောက် Blur ဝါးပေးခြင်း
         if cfg.get("full_band", True) or int(cfg.get("blur_boxes", 0)) > 0 or cfg.get("captions_on", True):
             band_y = int(out_h * 0.82)
             band_h = max(24, int(out_h * 0.14))
