@@ -162,16 +162,17 @@ async def assemblyai_upload_and_transcribe(
             raise RuntimeError(f"AssemblyAI Upload Error: {up_res.text}")
         upload_url = up_res.json()["upload_url"]
 
-        # Step 3: Transcribe Audio (universal-2 model သည် Free Tier 185 နာရီနှင့် 99+ languages ရသည်)
+        # Step 3: Transcribe Audio (AssemblyAI ၏ လက်ရှိ API သတ်မှတ်ချက်အသစ်အရ speech_models ကို သုံးခြင်း)
         update_job_step(job_id, "transcribe", 25)
         payload: Dict[str, Any] = {
             "audio_url": upload_url,
-            "speech_model": "universal-2",
+            "speech_models": ["universal-3-5-pro", "universal-2"],  # API အသစ်နှင့် ကိုက်ညီစေရန်
         }
         if source_lang == "Auto-detect" or not source_lang:
             payload["language_detection"] = True
         else:
             payload["language_code"] = source_lang
+
 
         tr_res = await client.post(
             "https://api.assemblyai.com/v2/transcript", headers=headers, json=payload
