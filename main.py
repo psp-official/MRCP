@@ -5,6 +5,7 @@ import uuid
 import time
 import shutil
 import asyncio
+import unicodedata
 import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -15,20 +16,15 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (2026 Free API Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (2026 Fixed Edition)")
 
-# Render Paid Plan Persistent Disk လမ်းကြောင်း (/var/data/recap_jobs)
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# -------------------------------------------------------------------------
-# 13.11.2026 FREE API CONFIGURATION & AUTO-FALLBACK MODELS
-# -------------------------------------------------------------------------
 DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
 
-# Free Model တစ်ခု Rate Limit (429) ဖြစ်နေပါက အလိုအလျောက် ပြောင်းသုံးမည့် 2026 Free Models စာရင်း
 FREE_MODEL_FALLBACKS = [
     "google/gemma-4-31b-it:free",
     "qwen/qwen3.8-27b:free",
@@ -38,7 +34,6 @@ FREE_MODEL_FALLBACKS = [
     "openrouter/free",
 ]
 
-# Edge-TTS (100% Free) Voice Mapping
 VOICE_MAP = {
     "Thiha": "my-MM-ThihaNeural",
     "Nilar": "my-MM-NilarNeural",
@@ -48,15 +43,80 @@ VOICE_MAP = {
     "Premwadee": "th-TH-PremwadeeNeural",
 }
 
-# Job Status များ သိမ်းဆည်းရန် Memory Store
 JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 # -------------------------------------------------------------------------
-# HELPER FUNCTIONS (FFMPEG, TIME, ASS SUBTITLES, DISK CLEANUP)
+# MYANMAR UNICODE NORMALIZER & TEXT CLEANER (လေးထောင့်ကွက် [] နှင့် Prompt စာသားဖယ်ရှားရန်)
+# -------------------------------------------------------------------------
+def clean_burmese_text(text: str) -> str:
+    """
+    ၁။ AI က မှားထည့်လိုက်သော Prompt ညွှန်ကြားချက်များကို ဖယ်ရှားခြင်း
+    ၂။ မြန်မာ Unicode သေးသေးတင်/တစ်ချောင်းငင် အစီအစဉ်မှား၍ [] ပေါ်ခြင်းကို ပြင်ဆင်ခြင်း
+    """
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFC", text)
+    # Remove prompt echo prefixes if any
+    text = re.sub(
+        r"^(ရင်ခုန်စရာ|သဘာဝကျသော|မြန်မာသဘာဝဖြင့်|ပြန်လည်ရေးသားပါ|Narration|Recap)[^:：]*[:：]\s*",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    )
+    # Remove zero-width characters & markdown symbols that cause [] boxes in libass
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff*#_`~]", "", text)
+    # Fix Myanmar Unicode vowel ordering: Anusvara (ံ U+1036) before U (ု U+102F / ူ U+1030) -> U before Anusvara
+    text = re.sub(r"\u1036(\u102f|\u1030)", r"\1\u1036", text)
+    # Fix Asat (် U+103A) + Dot below (့ U+1037) ordering
+    text = re.sub(r"\u1037\u103a", "\u103a\u1037", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def split_burmese_caption_chunks(text: str, words_per_caption: int) -> List[str]:
+    """
+    မြန်မာစာကြောင်းရှည်ကြီးကို စာတန်းထိုးတွင် ဖတ်ရလွယ်အောင် တစ်ကြောင်းလျှင်
+    စာလုံးရေ (Character/Syllable) အနေတော်အလိုက် သပ်သပ်ရပ်ရပ် ပိုင်းဖြတ်ပေးခြင်း
+    """
+    text = clean_burmese_text(text)
+    if not text:
+        return [""]
+    # words_per_caption = 9 ဆိုလျှင် မြန်မာစာလုံးရေ ~32 လုံးခန့် (တစ်ကြောင်းစာ အနေတော်)
+    max_chars = max(18, int(words_per_caption) * 3 + 5)
+
+    # ပုဒ်ဖြတ်၊ ပုဒ်မ နှင့် Space များမှ အရင်ခွဲထုတ်သည်
+    tokens = re.split(r"(?<=[၊။\s])", text)
+    chunks: List[str] = []
+    current = ""
+
+    for tk in tokens:
+        if not tk:
+            continue
+        if len(current) + len(tk) <= max_chars:
+            current += tk
+        else:
+            if current.strip():
+                chunks.append(current.strip())
+            # Token တစ်ခုတည်းက အရမ်းရှည်နေပါက မြန်မာအက္ခရာအလိုက် ထပ်ပိုင်းသည်
+            while len(tk) > max_chars:
+                # Consonant boundary ရှာပြီး ဖြတ်သည်
+                cut = max_chars
+                while cut < len(tk) and "\u102b" <= tk[cut] <= "\u103f":
+                    cut += 1
+                chunks.append(tk[:cut].strip())
+                tk = tk[cut:]
+            current = tk
+
+    if current.strip():
+        chunks.append(current.strip())
+
+    return chunks if chunks else [text]
+
+
+# -------------------------------------------------------------------------
+# FFMPEG & HELPER FUNCTIONS
 # -------------------------------------------------------------------------
 def run_cmd(cmd: List[str]) -> str:
-    """FFmpeg နှင့် FFprobe command များကို Run ရန် helper function"""
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{proc.stderr[-1000:]}")
@@ -64,7 +124,6 @@ def run_cmd(cmd: List[str]) -> str:
 
 
 def get_duration(file_path: Path) -> float:
-    """Video သို့မဟုတ် Audio ဖိုင်၏ ကြာချိန် (စက္ကန့်) ကို တွက်ချက်ခြင်း"""
     out = run_cmd([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
@@ -73,7 +132,6 @@ def get_duration(file_path: Path) -> float:
 
 
 def get_video_dimensions(file_path: Path) -> tuple[int, int]:
-    """မူရင်း Video ၏ Width နှင့် Height ကို ရယူခြင်း"""
     out = run_cmd([
         "ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=width,height",
@@ -86,7 +144,6 @@ def get_video_dimensions(file_path: Path) -> tuple[int, int]:
 
 
 def cleanup_old_jobs(max_age_seconds: int = 86400):
-    """၂၄ နာရီထက် ကျော်လွန်သော ဖိုင်အဟောင်းများကို Persistent Disk မှ အလိုအလျောက် ရှင်းလင်းခြင်း"""
     now = time.time()
     for folder in DATA_DIR.iterdir():
         if folder.is_dir():
@@ -98,7 +155,6 @@ def cleanup_old_jobs(max_age_seconds: int = 86400):
 
 
 def hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
-    """#RRGGBB အရောင်ကို .ass စာတန်းထိုးသုံး &HAABBGGRR format သို့ ပြောင်းခြင်း"""
     hex_color = hex_color.lstrip("#")
     if len(hex_color) != 6:
         hex_color = "FFFF00"
@@ -107,7 +163,6 @@ def hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
 
 
 def format_ass_time(seconds: float) -> str:
-    """စက္ကန့်ကို H:MM:SS.cc (.ass timestamp) သို့ ပြောင်းခြင်း"""
     seconds = max(0.0, seconds)
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
@@ -119,7 +174,6 @@ def format_ass_time(seconds: float) -> str:
 
 
 def update_job_step(job_id: str, step_name: str, progress: int):
-    """ပုံပါ အဆင့် (၇) ဆင့်၏ အမှန်ခြစ်နှင့် ရာခိုင်နှုန်းကို Update လုပ်ခြင်း"""
     step_order = [
         "extract_audio",
         "upload",
@@ -144,15 +198,52 @@ def update_job_step(job_id: str, step_name: str, progress: int):
 
 
 # -------------------------------------------------------------------------
-# STEP 2 & 3: ASSEMBLYAI FREE TIER (UPLOAD & TRANSCRIBE)
+# STEP 2 & 3: ASSEMBLYAI TRANSCRIBE (CHINESE / DONGHUA ACCURACY FIX)
 # -------------------------------------------------------------------------
+async def request_assemblyai_transcript(
+    client: httpx.AsyncClient,
+    headers: Dict[str, str],
+    upload_url: str,
+    lang_code: Optional[str],
+) -> Dict[str, Any]:
+    """AssemblyAI သို့ Transcript တောင်းခံပြီး ပြီးဆုံးသည်အထိ စောင့်ပေးသော helper"""
+    payload: Dict[str, Any] = {
+        "audio_url": upload_url,
+        # universal-2 သည် တရုတ် (zh) နှင့် အာရှဘာသာစကားများတွင် အင်္ဂလိပ်လို မှားမဖမ်းဘဲ အတိကျဆုံးဖြစ်သည်
+        "speech_models": ["universal-2"],
+    }
+    if lang_code:
+        payload["language_code"] = lang_code
+    else:
+        payload["language_detection"] = True
+        payload["language_confidence_threshold"] = 0.6
+
+    tr_res = await client.post(
+        "https://api.assemblyai.com/v2/transcript", headers=headers, json=payload
+    )
+    if tr_res.status_code != 200:
+        raise RuntimeError(f"AssemblyAI Transcript Error: {tr_res.text}")
+    transcript_id = tr_res.json()["id"]
+
+    while True:
+        st_res = await client.get(
+            f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers
+        )
+        data = st_res.json()
+        status = data.get("status")
+        if status == "completed":
+            return data
+        elif status == "error":
+            raise RuntimeError(f"AssemblyAI Failed: {data.get('error')}")
+        await asyncio.sleep(3)
+
+
 async def assemblyai_upload_and_transcribe(
-    audio_path: Path, api_key: str, source_lang: str, job_id: str
+    audio_path: Path, api_key: str, source_lang: str, job_id: str, total_video_dur: float
 ) -> List[Dict[str, Any]]:
-    """အဆင့် ၂ (Upload) နှင့် အဆင့် ၃ (Transcribe) - AssemblyAI Free Tier (185 Hours Free)"""
     headers = {"authorization": api_key.strip()}
     async with httpx.AsyncClient(timeout=300.0) as client:
-        # Step 2: Upload Audio
+        # Step 2: Upload
         update_job_step(job_id, "upload", 15)
         with open(audio_path, "rb") as f:
             up_res = await client.post(
@@ -162,55 +253,60 @@ async def assemblyai_upload_and_transcribe(
             raise RuntimeError(f"AssemblyAI Upload Error: {up_res.text}")
         upload_url = up_res.json()["upload_url"]
 
-        # Step 3: Transcribe Audio (AssemblyAI ၏ လက်ရှိ API သတ်မှတ်ချက်အသစ်အရ speech_models ကို သုံးခြင်း)
+        # Step 3: Transcribe
         update_job_step(job_id, "transcribe", 25)
-        payload: Dict[str, Any] = {
-            "audio_url": upload_url,
-            "speech_models": ["universal-3-5-pro", "universal-2"],  # API အသစ်နှင့် ကိုက်ညီစေရန်
-        }
-        if source_lang == "Auto-detect" or not source_lang:
-            payload["language_detection"] = True
-        else:
-            payload["language_code"] = source_lang
+        chosen_lang = None if (source_lang == "Auto-detect" or not source_lang) else source_lang
 
+        try:
+            data = await request_assemblyai_transcript(client, headers, upload_url, chosen_lang)
+            # Auto-detect က နောက်ခံတီးလုံးကြောင့် တရုတ်ကားကို English (en) လို့ မှားဖမ်းမိပြီး confidence နည်းနေလျှင်
+            # သို့မဟုတ် စာသားအလွန်နည်းနေလျှင် Chinese (zh) ဖြင့် အလိုအလျောက် ပြန်ဖမ်းပေးသည်
+            detected = data.get("language_code", "")
+            conf = float(data.get("language_confidence") or 1.0)
+            if chosen_lang is None and detected == "en" and conf < 0.82:
+                data = await request_assemblyai_transcript(client, headers, upload_url, "zh")
+        except Exception:
+            # Threshold မပြည့်ပါက Chinese (zh) ဖြင့် တိုက်ရိုက်ပြန်ဖမ်းသည်
+            data = await request_assemblyai_transcript(client, headers, upload_url, "zh")
 
-        tr_res = await client.post(
-            "https://api.assemblyai.com/v2/transcript", headers=headers, json=payload
-        )
-        if tr_res.status_code != 200:
-            raise RuntimeError(f"AssemblyAI Transcript Error: {tr_res.text}")
-        transcript_id = tr_res.json()["id"]
+        # Words array မှ အချိန်အတိအကျဖြင့် Scene Windows (12-18s) တည်ဆောက်ခြင်း
+        words = data.get("words") or []
+        if words:
+            sentences = []
+            cur_w = []
+            seg_st = words[0]["start"]
+            for w in words:
+                if not cur_w:
+                    seg_st = w["start"]
+                cur_w.append(w["text"])
+                dur_ms = w["end"] - seg_st
+                if dur_ms >= 10000 or w["text"].endswith(("。", "！", "？", ".", "!", "?")):
+                    if dur_ms >= 4000:
+                        sentences.append({
+                            "text": " ".join(cur_w),
+                            "start": seg_st,
+                            "end": w["end"],
+                        })
+                        cur_w = []
+            if cur_w:
+                sentences.append({
+                    "text": " ".join(cur_w),
+                    "start": seg_st,
+                    "end": words[-1]["end"],
+                })
+            if sentences:
+                return sentences
 
-        # Polling status
-        while True:
-            st_res = await client.get(
-                f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers
-            )
-            data = st_res.json()
-            status = data.get("status")
-            if status == "completed":
-                break
-            elif status == "error":
-                raise RuntimeError(f"AssemblyAI Failed: {data.get('error')}")
-            await asyncio.sleep(3)
-
-        # Sentences endpoint မှ တိကျသော Timestamps ရယူခြင်း
-        sent_res = await client.get(
-            f"https://api.assemblyai.com/v2/transcript/{transcript_id}/sentences",
-            headers=headers,
-        )
-        sentences = sent_res.json().get("sentences", [])
-        if not sentences and data.get("text"):
-            sentences = [{
-                "text": data["text"],
-                "start": 0,
-                "end": int((data.get("audio_duration") or 10) * 1000)
-            }]
-        return sentences
+        # Fallback if words list is empty
+        return [{
+            "text": data.get("text") or "",
+            "start": 0,
+            "end": int(total_video_dur * 1000),
+        }]
 
 
 # -------------------------------------------------------------------------
-# STEP 4: OPENROUTER FREE TIER (TRANSLATE / MOVIE RECAP GENERATION)
+# STEP 4: OPENROUTER NATURAL BURMESE MOVIE RECAP GENERATOR
 # -------------------------------------------------------------------------
 async def openrouter_generate_recap(
     sentences: List[Dict[str, Any]],
@@ -221,12 +317,13 @@ async def openrouter_generate_recap(
     want_hashtags: bool,
     default_hashtags: str,
     add_fyp: bool,
+    total_video_dur: float,
 ) -> Dict[str, Any]:
     """
-    အဆင့် ၄ (Translate / Recap) - OpenRouter Free Tier (50 Requests/Day Free)
-    Video ၁ ပုဒ်လုံးကို Request ၁ ကြိမ်တည်းဖြင့် ပို့ပြီး 429 ဖြစ်ပါက အခြား Free Model သို့ အလိုအလျောက် ပြောင်းပေးသည်။
+    ဗီဒီယို အစမှ အဆုံးထိ အခန်းမပြတ်တောက်စေရန် Continuous Scene Segments တည်ဆောက်ပြီး
+    သဘာဝကျသော မြန်မာ Movie Recap Narration အဖြစ် ပြောင်းလဲခြင်း
     """
-    segments = []
+    raw_groups = []
     cur_texts = []
     seg_start = 0.0
     seg_end = 0.0
@@ -238,106 +335,115 @@ async def openrouter_generate_recap(
             seg_start = st
         cur_texts.append(s["text"])
         seg_end = en
-        if (seg_end - seg_start) >= 12.0 or len(cur_texts) >= 4:
-            segments.append({
-                "index": len(segments),
-                "start": round(seg_start, 2),
-                "end": round(seg_end, 2),
+        if (seg_end - seg_start) >= 14.0:
+            raw_groups.append({
+                "start": seg_start,
+                "end": seg_end,
                 "text": " ".join(cur_texts),
             })
             cur_texts = []
 
     if cur_texts:
-        segments.append({
-            "index": len(segments),
-            "start": round(seg_start, 2),
-            "end": round(seg_end, 2),
+        raw_groups.append({
+            "start": seg_start,
+            "end": max(seg_end, seg_start + 5.0),
             "text": " ".join(cur_texts),
         })
 
-    lang_instruction = {
-        "မြန်မာ": "သဘာဝကျပြီး ဆွဲဆောင်မှုရှိသော မြန်မာစကားပြော (Burmese Movie Recap Narrator style) ဖြင့်",
-        "English": "in engaging third-person English Movie Recap narrator style",
-        "ไทย": "ในสไตล์ผู้บรรยายสรุปภาพยนตร์ภาษาไทยที่น่าติดตาม",
-    }.get(output_lang, "သဘာဝကျသော မြန်မာ Movie Recap Narrator ပုံစံဖြင့်")
+    # ဗီဒီယို အခန်းများ လုံးဝမပြတ်တောက်စေရန် 0.0s မှ Video အဆုံးထိ Continuous Timeline ချိတ်ဆက်ခြင်း
+    segments = []
+    for i, grp in enumerate(raw_groups):
+        win_start = 0.0 if i == 0 else raw_groups[i]["start"]
+        win_end = total_video_dur if i == len(raw_groups) - 1 else raw_groups[i + 1]["start"]
+        win_end = max(win_start + 3.0, win_end)
+        segments.append({
+            "index": i,
+            "start": round(win_start, 2),
+            "end": round(win_end, 2),
+            "duration_sec": round(win_end - win_start, 1),
+            "text": grp["text"],
+        })
 
-    if mode == "Subtitle":
-        style_rule = f"မူရင်းစကားပြောအတိုင်း {output_lang} ဘာသာသို့ တိကျသဘာဝကျစွာ ဘာသာပြန်ပေးပါ။"
-    else:
-        style_rule = (
-            f"မူရင်းဇာတ်ကောင်စကားပြော (Dialogue) များကို တိုက်ရိုက်မပြန်ဘဲ ဇာတ်လမ်းပြောပြသူ (3rd-Person Movie Recap Narrator) အသံဖြင့် "
-            f"{lang_instruction} အချိတ်အဆက်မိမိ ပြန်လည်ရေးသားပေးပါ။ အပိုင်းတစ်ခုချင်းစီ၏ ကြာချိန်နှင့် ကိုက်ညီသော စာကြောင်းအရှည် ဖြစ်ရပါမည်။"
-        )
+    system_prompt = """You are a top-tier professional Burmese Movie & Donghua (Xianxia) Recap Narrator.
+Your job is to convert the provided transcript segments into an engaging, natural 3rd-person Burmese Movie Recap narration script.
 
-    system_prompt = (
-        "You are an expert Movie Recap Scriptwriter.\n"
-        f"{style_rule}\n"
-        "IMPORTANT: Respond ONLY with a valid JSON object (no markdown formatting, no extra explanation) in this exact structure:\n"
-        '{"segments": [{"index": 0, "narration": "..."}], "tiktok_caption": "..."}\n'
-        "Keep the exact same number of segments and matching index values."
-    )
+CRITICAL RULES FOR BURMESE NARRATION:
+1. USE NATURAL SPOKEN BURMESE ONLY: End sentences naturally with "တယ်", "တာပေါ့", "လိုက်တယ်", "ခဲ့တယ်", "နေတော့တာပေါ့".
+2. NEVER USE STIFF LITERARY BURMESE: Strictly forbid using "သည်", "၏", "၌", "၎င်း", "လူကြီးမားသည်", "ပြုလုပ်နေပါသည်".
+3. NEVER ECHO INSTRUCTIONS: Do NOT write phrases like "ရင်ခုန်စရာ မြန်မာသဘာဝဖြင့် ပြန်လည်ရေးသားပါ:" or any intro labels. Output ONLY the story narration!
+4. CONTEXTUAL CORRECTION: The input transcript is from a Chinese Cultivation (Xianxia) / Drama video and may contain ASR phonetic typos. Infer the true meaning from context (e.g. Sect Master/ဂိုဏ်းချုပ်, Senior Sister/စီနီယာအစ်မ, Maid/အစေခံမလေး, Spirit Stones/ဝိညာဉ်ကျောက်တုံး, Cultivation Realm/ကျင့်ကြံခြင်းအဆင့်, System/စနစ်). NEVER output random English place names like "Arkansas" or "America".
+5. LENGTH MATCHING: Match each narration length to its `duration_sec` (approx. 3 to 4 Burmese words per second of duration).
+6. OUTPUT FORMAT: Return ONLY a valid JSON object:
+{"segments": [{"index": 0, "narration": "..."}], "tiktok_caption": "..."}"""
 
-    user_content = json.dumps({"segments": segments}, ensure_ascii=False)
-
-    preferred = model or DEFAULT_OPENROUTER_MODEL
-    candidate_models = [preferred] + [m for m in FREE_MODEL_FALLBACKS if m != preferred]
-
+    # Segment အရေအတွက် များပါက 25 ခုစီ Chunk ခွဲပို့ပြီး JSON မှန်ကန်စွာ ရယူသည်
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://recap-app.onrender.com",
         "X-Title": "AI Movie Recap Narrator",
     }
+    preferred = model or DEFAULT_OPENROUTER_MODEL
+    candidate_models = [preferred] + [m for m in FREE_MODEL_FALLBACKS if m != preferred]
 
-    raw_content = None
-    last_error = ""
+    narr_map: Dict[int, str] = {}
+    tiktok_cap = "ဇာတ်လမ်းကောင်းလေးကို အဆုံးထိ အားပေးကြပါဦးနော် 🎬"
+    batch_size = 25
 
     async with httpx.AsyncClient(timeout=240.0) as client:
-        for try_model in candidate_models:
-            body = {
-                "model": try_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-            }
-            res = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body
-            )
-            if res.status_code == 200:
-                res_json = res.json()
-                if "choices" in res_json and res_json["choices"]:
-                    raw_content = res_json["choices"][0]["message"]["content"]
-                    if raw_content:
-                        break
-            last_error = f"[{try_model}] {res.status_code}: {res.text}"
-            await asyncio.sleep(2)
+        for b_start in range(0, len(segments), batch_size):
+            batch = segments[b_start : b_start + batch_size]
+            user_content = json.dumps({"segments": batch}, ensure_ascii=False)
+            raw_content = None
+            last_error = ""
 
-    if not raw_content:
-        raise RuntimeError(f"OpenRouter Free Models အားလုံး ခေတ္တပြည့်နေပါသည်: {last_error}")
+            for try_model in candidate_models:
+                body = {
+                    "model": try_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                }
+                res = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body
+                )
+                if res.status_code == 200:
+                    res_json = res.json()
+                    if "choices" in res_json and res_json["choices"]:
+                        raw_content = res_json["choices"][0]["message"]["content"]
+                        if raw_content:
+                            break
+                last_error = f"[{try_model}] {res.status_code}: {res.text}"
+                await asyncio.sleep(2)
 
-    # JSON Parsing (Markdown code block ပါလာလျှင်လည်း သန့်စင်ဖတ်ယူသည်)
-    json_match = re.search(r"\{.*\}", raw_content, flags=re.DOTALL)
-    cleaned = json_match.group(0) if json_match else raw_content.strip()
-    parsed = json.loads(cleaned)
+            if not raw_content:
+                raise RuntimeError(f"OpenRouter Error: {last_error}")
 
-    narr_map = {int(item["index"]): item["narration"] for item in parsed.get("segments", [])}
+            json_match = re.search(r"\{.*\}", raw_content, flags=re.DOTALL)
+            cleaned = json_match.group(0) if json_match else raw_content.strip()
+            parsed = json.loads(cleaned)
+
+            for item in parsed.get("segments", []):
+                narr_map[int(item["index"])] = clean_burmese_text(item.get("narration", ""))
+            if parsed.get("tiktok_caption"):
+                tiktok_cap = clean_burmese_text(parsed["tiktok_caption"])
+
     for seg in segments:
-        seg["narration"] = narr_map.get(seg["index"], seg["text"])
+        seg["narration"] = narr_map.get(seg["index"]) or clean_burmese_text(seg["text"])
 
     caption_out = ""
     if want_hashtags:
-        base_cap = parsed.get("tiktok_caption", "ဇာတ်လမ်းကောင်းလေးကို အဆုံးထိကြည့်ရှုပေးကြပါဦးနော် 🎬")
         tags = default_hashtags.strip()
         if add_fyp and "#fyp" not in tags.lower():
             tags = f"{tags} #fyp".strip()
-        caption_out = f"{base_cap}\n{tags}".strip()
+        caption_out = f"{tiktok_cap}\n{tags}".strip()
 
     return {"segments": segments, "tiktok_caption": caption_out}
 
 
 # -------------------------------------------------------------------------
-# STEP 6: ASS SUBTITLE BUILDER
+# STEP 6: ASS SUBTITLE BUILDER (NO TOFU BOXES [], SINGLE CLEAN LINE)
 # -------------------------------------------------------------------------
 def build_ass_subtitles(
     caption_events: List[Dict[str, Any]],
@@ -346,21 +452,21 @@ def build_ass_subtitles(
     play_res_y: int,
     ass_path: Path,
 ):
-    """အဆင့် ၆ (Timeline + captions) - User ရွေးထားသော ဒီဇိုင်းအတိုင်း .ass စာတန်းထိုးဖိုင် တည်ဆောက်ခြင်း"""
-    font_name = cfg.get("font", "A13 WenYoe")
+    # Noto Sans Myanmar သို့မဟုတ် Padauk ကို သုံးခြင်းဖြင့် မြန်မာစာ [] လုံးဝမပေါ်စေပါ
+    req_font = cfg.get("font", "Noto Sans Myanmar")
+    font_name = "Padauk" if req_font == "Padauk" else "Noto Sans Myanmar"
     font_size = int(cfg.get("text_size", 30))
     primary_col = hex_to_ass_color(cfg.get("text_color", "#FFFF00"), 0)
     outline_col = hex_to_ass_color(cfg.get("outline_color", "#000000"), 0)
-    back_col = hex_to_ass_color("#000000", 110)
+    back_col = hex_to_ass_color("#000000", 130)
     outline_w = int(cfg.get("outline_width", 3))
     bold_flag = -1 if cfg.get("bold", True) else 0
     border_style = 3 if cfg.get("box_bg", False) else 1
 
-    # Vertical Position (%) နှင့် Caption Width (%) တွက်ချက်ခြင်း
     vert_pct = int(cfg.get("vertical_position", 89))
-    margin_v = max(10, int(play_res_y * (100 - vert_pct) / 100.0))
+    margin_v = max(16, int(play_res_y * (100 - vert_pct) / 100.0))
     width_pct = int(cfg.get("caption_width", 96))
-    side_margin = max(10, int(play_res_x * (100 - width_pct) / 200.0))
+    side_margin = max(16, int(play_res_x * (100 - width_pct) / 200.0))
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -370,7 +476,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{primary_col},{primary_col},{outline_col},{back_col},{bold_flag},0,0,0,100,100,0,0,{border_style},{outline_w},0,2,{side_margin},{side_margin},{margin_v},1
+Style: Default,{font_name},{font_size},{primary_col},{primary_col},{outline_col},{back_col},{bold_flag},0,0,0,100,100,0,0,{border_style},{outline_w},1,2,{side_margin},{side_margin},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -379,8 +485,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for ev in caption_events:
         st = format_ass_time(ev["start"])
         en = format_ass_time(ev["end"])
-        txt = ev["text"].replace("\n", "\\N")
-        lines.append(f"Dialogue: 0,{st},{en},Default,,0,0,0,,{txt}")
+        txt = clean_burmese_text(ev["text"])
+        if txt:
+            lines.append(f"Dialogue: 0,{st},{en},Default,,0,0,0,,{txt}")
 
     ass_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -391,7 +498,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 async def process_recap_pipeline(
     job_id: str, video_path: Path, cfg: Dict[str, Any], logo_path: Optional[Path]
 ):
-    """ပုံပါ အဆင့် (၇) ဆင့်လုံးကို အစမှအဆုံး အလိုအလျောက် လုပ်ဆောင်ပေးမည့် Main Pipeline"""
     job_dir = DATA_DIR / job_id
     try:
         cleanup_old_jobs()
@@ -404,6 +510,7 @@ async def process_recap_pipeline(
             raise RuntimeError("AssemblyAI နှင့် OpenRouter API Key များကို 'Own key' တွင် ထည့်သွင်းပေးပါ။")
 
         orig_w, orig_h = await asyncio.to_thread(get_video_dimensions, video_path)
+        total_video_dur = await asyncio.to_thread(get_duration, video_path)
 
         # ---------------------------------------------------------
         # 1. Extract audio
@@ -420,14 +527,18 @@ async def process_recap_pipeline(
         )
 
         # ---------------------------------------------------------
-        # 2. Upload & 3. Transcribe (AssemblyAI Free Tier)
+        # 2. Upload & 3. Transcribe
         # ---------------------------------------------------------
         sentences = await assemblyai_upload_and_transcribe(
-            extracted_audio, aai_key, cfg.get("source_language", "Auto-detect"), job_id
+            extracted_audio,
+            aai_key,
+            cfg.get("source_language", "Auto-detect"),
+            job_id,
+            total_video_dur,
         )
 
         # ---------------------------------------------------------
-        # 4. Translate / AI Recap Script (OpenRouter Free Tier)
+        # 4. Translate / AI Recap Script
         # ---------------------------------------------------------
         update_job_step(job_id, "translate", 42)
         recap_data = await openrouter_generate_recap(
@@ -439,12 +550,13 @@ async def process_recap_pipeline(
             want_hashtags=cfg.get("ai_hashtags", True),
             default_hashtags=cfg.get("default_hashtags", ""),
             add_fyp=cfg.get("add_fyp", True),
+            total_video_dur=total_video_dur,
         )
         segments = recap_data["segments"]
         JOBS[job_id]["tiktok_caption"] = recap_data["tiktok_caption"]
 
         # ---------------------------------------------------------
-        # 5. Voice (Edge-TTS Narrator အသံထုတ်ခြင်း)
+        # 5. Voice (Edge-TTS Narrator)
         # ---------------------------------------------------------
         update_job_step(job_id, "voice", 58)
         voice_short = cfg.get("voice_name", "Thiha")
@@ -462,10 +574,10 @@ async def process_recap_pipeline(
             seg["tts_duration"] = await asyncio.to_thread(get_duration, tts_file)
 
         # ---------------------------------------------------------
-        # 6. Timeline + captions (မူရင်းရုပ်ရှင်အသံကို လုံးဝဖျောက်ပြီး Video Speed နှင့် Captions ချိန်ညှိခြင်း)
+        # 6. Timeline + captions (PTS-STARTPTS Fix & Proper Burmese Chunking)
         # ---------------------------------------------------------
         update_job_step(job_id, "timeline_captions", 70)
-        words_per_cap = max(2, int(cfg.get("words_per_caption", 9)))
+        words_per_cap = max(3, int(cfg.get("words_per_caption", 9)))
         caption_events = []
         concat_v_list = []
         concat_a_list = []
@@ -474,17 +586,18 @@ async def process_recap_pipeline(
         for seg in segments:
             orig_dur = max(0.5, seg["end"] - seg["start"])
             tts_dur = max(0.5, seg["tts_duration"])
-            # မူရင်း Video အပိုင်းကို Narrator အသံအရှည်နှင့် ကွက်တိဖြစ်အောင် Speed ညှိပြီး မူရင်းအသံကို လုံးဝဖျောက် (-an) သည်
             pts_factor = tts_dur / orig_dur
             v_seg_path = job_dir / f"vseg_{seg['index']:04d}.mp4"
+
             await asyncio.to_thread(
                 run_cmd,
                 [
                     "ffmpeg", "-y",
-                    "-ss", str(seg["start"]), "-to", str(seg["end"]),
+                    "-ss", str(seg["start"]),
+                    "-t", str(orig_dur),
                     "-i", str(video_path),
                     "-an",  # မူရင်းရုပ်ရှင်အသံ လုံးဝဖျောက်ပစ်ခြင်း
-                    "-vf", f"setpts={pts_factor:.4f}*PTS",
+                    "-vf", f"setpts={pts_factor:.4f}*(PTS-STARTPTS)",
                     "-r", "24", "-c:v", "libx264", "-preset", "ultrafast",
                     str(v_seg_path),
                 ],
@@ -492,21 +605,21 @@ async def process_recap_pipeline(
             concat_v_list.append(v_seg_path)
             concat_a_list.append(seg["tts_file"])
 
-            # Words per caption အလိုက် စာတန်းထိုး အချိန်ပိုင်းခြားခြင်း
-            words = seg["narration"].split()
-            if not words:
-                words = [seg["narration"]]
-            chunks = [" ".join(words[i : i + words_per_cap]) for i in range(0, len(words), words_per_cap)]
-            chunk_dur = tts_dur / len(chunks)
-            for idx, ch in enumerate(chunks):
+            # မြန်မာစာကြောင်းကို တစ်ကြောင်းစာ အနေတော်အလိုက် အချိန်အတိအကျ ပိုင်းဖြတ်ခြင်း
+            chunks = split_burmese_caption_chunks(seg["narration"], words_per_cap)
+            total_chars = max(1, sum(len(c) for c in chunks))
+            cur_offset = 0.0
+            for ch in chunks:
+                ch_dur = tts_dur * (len(ch) / total_chars)
                 caption_events.append({
-                    "start": timeline_cursor + idx * chunk_dur,
-                    "end": timeline_cursor + (idx + 1) * chunk_dur,
+                    "start": timeline_cursor + cur_offset,
+                    "end": timeline_cursor + cur_offset + ch_dur,
                     "text": ch,
                 })
+                cur_offset += ch_dur
+
             timeline_cursor += tts_dur
 
-        # Video နှင့် Narrator Audio အပိုင်းများကို ဆက်ခြင်း
         v_list_txt = job_dir / "v_list.txt"
         a_list_txt = job_dir / "a_list.txt"
         v_list_txt.write_text("\n".join([f"file '{p.name}'" for p in concat_v_list]), encoding="utf-8")
@@ -523,7 +636,7 @@ async def process_recap_pipeline(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(a_list_txt), "-c", "copy", str(merged_audio)],
         )
 
-        # Output Resolution တွက်ချက်ခြင်း
+        # Output Resolution
         hd_1080 = cfg.get("tiktok_hd", False)
         ratio = cfg.get("ratio", "Original")
         base_dim = 1080 if hd_1080 else 720
@@ -548,30 +661,25 @@ async def process_recap_pipeline(
         build_ass_subtitles(caption_events, cfg, out_w, out_h, ass_path)
 
         # ---------------------------------------------------------
-        # 7. Render video (FFmpeg Visual Effects, Blur, Captions, Watermark, Round Logo)
+        # 7. Render video (Auto Subtitle Blur + Visual Effects + Captions)
         # ---------------------------------------------------------
         update_job_step(job_id, "render_video", 85)
         vf_filters = []
 
-        # Random 4px crop
         if cfg.get("random_4px_crop", False):
             vf_filters.append("crop=iw-8:ih-8:4:4")
 
-        # Zoom (%)
         zoom_pct = int(cfg.get("zoom", 100))
         if zoom_pct > 100:
             zf = zoom_pct / 100.0
             vf_filters.append(f"scale=iw*{zf}:ih*{zf},crop=iw/{zf}:ih/{zf}")
 
-        # Mirror (flip left/right)
         if cfg.get("mirror", False):
             vf_filters.append("hflip")
 
-        # Ratio & Fit Mode: Crop (fill) vs Pad (blur bg)
         fit_mode = cfg.get("fit_mode", "crop")
         if ratio != "Original":
             if fit_mode == "pad":
-                # Pad (blur bg): နောက်ခံကို Blur ခင်းပြီး အပေါ်မှ မူရင်း Video တင်ခြင်း
                 vf_filters.append(
                     f"split[original][copy];"
                     f"[copy]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},boxblur=20:10[blurred];"
@@ -579,27 +687,29 @@ async def process_recap_pipeline(
                     f"[blurred][scaled]overlay=(W-w)/2:(H-h)/2"
                 )
             else:
-                # Crop (fill)
                 vf_filters.append(
                     f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h}"
                 )
         else:
             vf_filters.append(f"scale={out_w}:{out_h}")
 
-        # Blur boxes သို့မဟုတ် Full band (cover original subtitles)
-        if cfg.get("full_band", False) or int(cfg.get("blur_boxes", 0)) > 0:
-            vf_filters.append("drawbox=x=0:y=ih*0.78:w=iw:h=ih*0.16:color=black@0.75:t=fill")
+        # မူရင်း တရုတ်စာတန်းထိုးများ မြန်မာစာတန်းထိုးအောက်တွင် မရှုပ်နေစေရန် အောက်ခြေ Subtitle နေရာကို သဘာဝကျကျ Blur ဝါးပေးခြင်း
+        if cfg.get("full_band", True) or int(cfg.get("blur_boxes", 0)) > 0 or cfg.get("captions_on", True):
+            band_y = int(out_h * 0.82)
+            band_h = max(24, int(out_h * 0.14))
+            vf_filters.append(
+                f"split[vbase][vsub];"
+                f"[vsub]crop={out_w}:{band_h}:0:{band_y},boxblur=18:6[vblur];"
+                f"[vbase][vblur]overlay=0:{band_y}"
+            )
 
-        # TikTok HD (1080p) Sharpening
         if hd_1080:
             vf_filters.append("unsharp=5:5:0.8:3:3:0.4")
 
-        # Captions (.ass)
         if cfg.get("captions_on", True):
             escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
             vf_filters.append(f"ass='{escaped_ass}'")
 
-        # Watermark text
         if cfg.get("watermark_on", False) and cfg.get("watermark_text"):
             wm_txt = re.sub(r"[^A-Za-z0-9_\-\.\s]", "", cfg["watermark_text"])
             wm_size = int(cfg.get("watermark_size", 17))
@@ -617,7 +727,6 @@ async def process_recap_pipeline(
         final_video = job_dir / "final_recap.mp4"
         vf_chain = ",".join(vf_filters) if vf_filters else "null"
 
-        # Round Logo ပါဝင်ပါက Overlay ထပ်တင်ခြင်း
         if logo_path and logo_path.exists():
             filter_complex = (
                 f"[0:v]{vf_chain}[vmain];"
@@ -660,7 +769,6 @@ async def process_recap_pipeline(
 
         await asyncio.to_thread(run_cmd, ffmpeg_cmd)
 
-        # Process အားလုံး ပြီးမြောက်ခြင်း
         for k in JOBS[job_id]["steps"]:
             JOBS[job_id]["steps"][k] = "done"
         JOBS[job_id]["progress"] = 100
@@ -681,7 +789,6 @@ async def voice_preview(
     speed: int = Form(30),
     pitch: int = Form(0),
 ):
-    """Voice Tab ထဲက Play (▶) ခလုတ်နှိပ်လျှင် နမူနာအသံ ဖွင့်ပြရန် Endpoint"""
     voice_id = VOICE_MAP.get(voice_name, "my-MM-ThihaNeural")
     sample_text = "မင်္ဂလာပါခင်ဗျာ၊ ဒီနေ့မှာတော့ စိတ်ဝင်စားစရာကောင်းတဲ့ ရုပ်ရှင်ဇာတ်လမ်းလေးကို တင်ဆက်ပေးသွားမှာ ဖြစ်ပါတယ်။"
     out_file = DATA_DIR / f"preview_{voice_name}_{speed}_{pitch}.mp3"
@@ -698,7 +805,6 @@ async def start_recap(
     config: str = Form(...),
     logo: Optional[UploadFile] = File(None),
 ):
-    """▶ Start နှိပ်လိုက်သည့်အခါ Job စတင်ပြီး အဆင့် (၇) ဆင့် Progress ပြန်ပေးမည့် Endpoint"""
     job_id = str(uuid.uuid4())[:10]
     job_dir = DATA_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -743,7 +849,6 @@ async def start_recap(
 
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    """Frontend မှ ၂ စက္ကန့်တစ်ကြိမ် လှမ်းမေးမည့် Progress Status Endpoint"""
     if job_id not in JOBS:
         raise HTTPException(status_code=404, detail="Job not found")
     job = JOBS[job_id]
@@ -755,13 +860,11 @@ async def get_status(job_id: str):
 
 @app.get("/api/download/{job_id}")
 async def download_video(job_id: str):
-    """Render ပြီးသွားသော Final Movie Recap Video ကို Download ဆွဲရန် Endpoint"""
     final_video = DATA_DIR / job_id / "final_recap.mp4"
     if not final_video.exists():
         raise HTTPException(status_code=404, detail="Video not ready")
     return FileResponse(final_video, media_type="video/mp4", filename=f"recap_{job_id}.mp4")
 
 
-# Frontend UI (static/index.html) ကို Serve လုပ်ခြင်း
 Path("static").mkdir(exist_ok=True)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
