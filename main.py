@@ -15,12 +15,15 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator")
+app = FastAPI(title="AI Movie Recap Narrator (2026 Free API Edition)")
 
+# Render Paid Plan Persistent Disk လမ်းကြောင်း (/var/data/recap_jobs)
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# Environment Variables မှ Default Keys (User က Own Key မထည့်ပါက fallback သုံးရန်)
+# -------------------------------------------------------------------------
+# 13.11.2026 FREE API CONFIGURATION & AUTO-FALLBACK MODELS
+# -------------------------------------------------------------------------
 DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
@@ -35,9 +38,7 @@ FREE_MODEL_FALLBACKS = [
     "openrouter/free",
 ]
 
-# Job Status များ သိမ်းဆည်းရန် Memory Store
-JOBS: Dict[str, Dict[str, Any]] = {}
-
+# Edge-TTS (100% Free) Voice Mapping
 VOICE_MAP = {
     "Thiha": "my-MM-ThihaNeural",
     "Nilar": "my-MM-NilarNeural",
@@ -47,12 +48,18 @@ VOICE_MAP = {
     "Premwadee": "th-TH-PremwadeeNeural",
 }
 
+# Job Status များ သိမ်းဆည်းရန် Memory Store
+JOBS: Dict[str, Dict[str, Any]] = {}
 
-def run_cmd(cmd: List[str]):
+
+# -------------------------------------------------------------------------
+# HELPER FUNCTIONS (FFMPEG, TIME, ASS SUBTITLES, DISK CLEANUP)
+# -------------------------------------------------------------------------
+def run_cmd(cmd: List[str]) -> str:
     """FFmpeg နှင့် FFprobe command များကို Run ရန် helper function"""
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{proc.stderr[-800:]}")
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{proc.stderr[-1000:]}")
     return proc.stdout
 
 
@@ -63,6 +70,31 @@ def get_duration(file_path: Path) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
     ])
     return float(out.strip() or 0.0)
+
+
+def get_video_dimensions(file_path: Path) -> tuple[int, int]:
+    """မူရင်း Video ၏ Width နှင့် Height ကို ရယူခြင်း"""
+    out = run_cmd([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=s=x:p=0", str(file_path)
+    ])
+    parts = out.strip().split("x")
+    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+        return int(parts[0]), int(parts[1])
+    return 1280, 720
+
+
+def cleanup_old_jobs(max_age_seconds: int = 86400):
+    """၂၄ နာရီထက် ကျော်လွန်သော ဖိုင်အဟောင်းများကို Persistent Disk မှ အလိုအလျောက် ရှင်းလင်းခြင်း"""
+    now = time.time()
+    for folder in DATA_DIR.iterdir():
+        if folder.is_dir():
+            try:
+                if now - folder.stat().st_mtime > max_age_seconds:
+                    shutil.rmtree(folder, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
@@ -111,6 +143,9 @@ def update_job_step(job_id: str, step_name: str, progress: int):
             job["steps"][s] = "pending"
 
 
+# -------------------------------------------------------------------------
+# STEP 2 & 3: ASSEMBLYAI FREE TIER (UPLOAD & TRANSCRIBE)
+# -------------------------------------------------------------------------
 async def assemblyai_upload_and_transcribe(
     audio_path: Path, api_key: str, source_lang: str, job_id: str
 ) -> List[Dict[str, Any]]:
@@ -127,11 +162,11 @@ async def assemblyai_upload_and_transcribe(
             raise RuntimeError(f"AssemblyAI Upload Error: {up_res.text}")
         upload_url = up_res.json()["upload_url"]
 
-        # Step 3: Transcribe Audio (Free Tier 185 Hours သုံးနိုင်ရန် universal-2 model ကို သုံးသည်)
+        # Step 3: Transcribe Audio (universal-2 model သည် Free Tier 185 နာရီနှင့် 99+ languages ရသည်)
         update_job_step(job_id, "transcribe", 25)
         payload: Dict[str, Any] = {
             "audio_url": upload_url,
-            "speech_model": "universal-2",  # 99+ languages & Free Tier 185 hrs supported
+            "speech_model": "universal-2",
         }
         if source_lang == "Auto-detect" or not source_lang:
             payload["language_detection"] = True
@@ -158,6 +193,7 @@ async def assemblyai_upload_and_transcribe(
                 raise RuntimeError(f"AssemblyAI Failed: {data.get('error')}")
             await asyncio.sleep(3)
 
+        # Sentences endpoint မှ တိကျသော Timestamps ရယူခြင်း
         sent_res = await client.get(
             f"https://api.assemblyai.com/v2/transcript/{transcript_id}/sentences",
             headers=headers,
@@ -172,6 +208,9 @@ async def assemblyai_upload_and_transcribe(
         return sentences
 
 
+# -------------------------------------------------------------------------
+# STEP 4: OPENROUTER FREE TIER (TRANSLATE / MOVIE RECAP GENERATION)
+# -------------------------------------------------------------------------
 async def openrouter_generate_recap(
     sentences: List[Dict[str, Any]],
     api_key: str,
@@ -226,20 +265,19 @@ async def openrouter_generate_recap(
     else:
         style_rule = (
             f"မူရင်းဇာတ်ကောင်စကားပြော (Dialogue) များကို တိုက်ရိုက်မပြန်ဘဲ ဇာတ်လမ်းပြောပြသူ (3rd-Person Movie Recap Narrator) အသံဖြင့် "
-            f"{lang_instruction} အချိတ်အဆက်မိမိ ပြန်လည်ရေးသားပေးပါ။"
+            f"{lang_instruction} အချိတ်အဆက်မိမိ ပြန်လည်ရေးသားပေးပါ။ အပိုင်းတစ်ခုချင်းစီ၏ ကြာချိန်နှင့် ကိုက်ညီသော စာကြောင်းအရှည် ဖြစ်ရပါမည်။"
         )
 
     system_prompt = (
         "You are an expert Movie Recap Scriptwriter.\n"
         f"{style_rule}\n"
-        "IMPORTANT: Respond ONLY with a valid JSON object (no markdown formatting, no extra text) in this exact structure:\n"
+        "IMPORTANT: Respond ONLY with a valid JSON object (no markdown formatting, no extra explanation) in this exact structure:\n"
         '{"segments": [{"index": 0, "narration": "..."}], "tiktok_caption": "..."}\n'
         "Keep the exact same number of segments and matching index values."
     )
 
     user_content = json.dumps({"segments": segments}, ensure_ascii=False)
 
-    # ရွေးထားသော Model ကို ရှေ့ဆုံးမှထားပြီး မရပါက အခြား Free Model များကို အစဉ်လိုက် စမ်းသပ်မည်
     preferred = model or DEFAULT_OPENROUTER_MODEL
     candidate_models = [preferred] + [m for m in FREE_MODEL_FALLBACKS if m != preferred]
 
@@ -271,14 +309,13 @@ async def openrouter_generate_recap(
                     raw_content = res_json["choices"][0]["message"]["content"]
                     if raw_content:
                         break
-            # 429 (Rate limit) သို့မဟုတ် Provider busy ဖြစ်ပါက ၂ စက္ကန့်စောင့်ပြီး နောက် Free Model တစ်ခု ပြောင်းသုံးမည်
             last_error = f"[{try_model}] {res.status_code}: {res.text}"
             await asyncio.sleep(2)
 
     if not raw_content:
         raise RuntimeError(f"OpenRouter Free Models အားလုံး ခေတ္တပြည့်နေပါသည်: {last_error}")
 
-    # Free Model များမှ ထွက်လာသော JSON ကို သန့်စင်ဖတ်ယူခြင်း
+    # JSON Parsing (Markdown code block ပါလာလျှင်လည်း သန့်စင်ဖတ်ယူသည်)
     json_match = re.search(r"\{.*\}", raw_content, flags=re.DOTALL)
     cleaned = json_match.group(0) if json_match else raw_content.strip()
     parsed = json.loads(cleaned)
@@ -298,6 +335,9 @@ async def openrouter_generate_recap(
     return {"segments": segments, "tiktok_caption": caption_out}
 
 
+# -------------------------------------------------------------------------
+# STEP 6: ASS SUBTITLE BUILDER
+# -------------------------------------------------------------------------
 def build_ass_subtitles(
     caption_events: List[Dict[str, Any]],
     cfg: Dict[str, Any],
@@ -306,20 +346,18 @@ def build_ass_subtitles(
     ass_path: Path,
 ):
     """အဆင့် ၆ (Timeline + captions) - User ရွေးထားသော ဒီဇိုင်းအတိုင်း .ass စာတန်းထိုးဖိုင် တည်ဆောက်ခြင်း"""
-    font_name = cfg.get("font", "Padauk")
-    if font_name == "A13 WenYoe":
-        font_name = "A13 WenYoe"
+    font_name = cfg.get("font", "A13 WenYoe")
     font_size = int(cfg.get("text_size", 30))
     primary_col = hex_to_ass_color(cfg.get("text_color", "#FFFF00"), 0)
     outline_col = hex_to_ass_color(cfg.get("outline_color", "#000000"), 0)
-    back_col = hex_to_ass_color("#000000", 120)
+    back_col = hex_to_ass_color("#000000", 110)
     outline_w = int(cfg.get("outline_width", 3))
     bold_flag = -1 if cfg.get("bold", True) else 0
     border_style = 3 if cfg.get("box_bg", False) else 1
 
     # Vertical Position (%) နှင့် Caption Width (%) တွက်ချက်ခြင်း
     vert_pct = int(cfg.get("vertical_position", 89))
-    margin_v = int(play_res_y * (100 - vert_pct) / 100.0)
+    margin_v = max(10, int(play_res_y * (100 - vert_pct) / 100.0))
     width_pct = int(cfg.get("caption_width", 96))
     side_margin = max(10, int(play_res_x * (100 - width_pct) / 200.0))
 
@@ -346,16 +384,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     ass_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, Any], logo_path: Optional[Path]):
+# -------------------------------------------------------------------------
+# MAIN 7-STEP PIPELINE WORKER
+# -------------------------------------------------------------------------
+async def process_recap_pipeline(
+    job_id: str, video_path: Path, cfg: Dict[str, Any], logo_path: Optional[Path]
+):
     """ပုံပါ အဆင့် (၇) ဆင့်လုံးကို အစမှအဆုံး အလိုအလျောက် လုပ်ဆောင်ပေးမည့် Main Pipeline"""
     job_dir = DATA_DIR / job_id
     try:
+        cleanup_old_jobs()
+
         aai_key = cfg.get("assemblyai_key") or DEFAULT_ASSEMBLYAI_KEY
         or_key = cfg.get("openrouter_key") or DEFAULT_OPENROUTER_KEY
         or_model = cfg.get("openrouter_model") or DEFAULT_OPENROUTER_MODEL
 
         if not aai_key or not or_key:
             raise RuntimeError("AssemblyAI နှင့် OpenRouter API Key များကို 'Own key' တွင် ထည့်သွင်းပေးပါ။")
+
+        orig_w, orig_h = await asyncio.to_thread(get_video_dimensions, video_path)
 
         # ---------------------------------------------------------
         # 1. Extract audio
@@ -364,18 +411,22 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
         extracted_audio = job_dir / "source_audio.mp3"
         await asyncio.to_thread(
             run_cmd,
-            ["ffmpeg", "-y", "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(extracted_audio)],
+            [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
+                str(extracted_audio),
+            ],
         )
 
         # ---------------------------------------------------------
-        # 2. Upload & 3. Transcribe (AssemblyAI)
+        # 2. Upload & 3. Transcribe (AssemblyAI Free Tier)
         # ---------------------------------------------------------
         sentences = await assemblyai_upload_and_transcribe(
             extracted_audio, aai_key, cfg.get("source_language", "Auto-detect"), job_id
         )
 
         # ---------------------------------------------------------
-        # 4. Translate / AI Recap Script (OpenRouter)
+        # 4. Translate / AI Recap Script (OpenRouter Free Tier)
         # ---------------------------------------------------------
         update_job_step(job_id, "translate", 42)
         recap_data = await openrouter_generate_recap(
@@ -410,7 +461,7 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
             seg["tts_duration"] = await asyncio.to_thread(get_duration, tts_file)
 
         # ---------------------------------------------------------
-        # 6. Timeline + captions (မူရင်းအသံဖျောက်ပြီး Video Speed နှင့် Captions ချိန်ညှိခြင်း)
+        # 6. Timeline + captions (မူရင်းရုပ်ရှင်အသံကို လုံးဝဖျောက်ပြီး Video Speed နှင့် Captions ချိန်ညှိခြင်း)
         # ---------------------------------------------------------
         update_job_step(job_id, "timeline_captions", 70)
         words_per_cap = max(2, int(cfg.get("words_per_caption", 9)))
@@ -422,7 +473,7 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
         for seg in segments:
             orig_dur = max(0.5, seg["end"] - seg["start"])
             tts_dur = max(0.5, seg["tts_duration"])
-            # Video အပိုင်းကို Narrator အသံအရှည်နှင့် ကွက်တိဖြစ်အောင် Speed ညှိပြီး မူရင်းအသံကို လုံးဝဖျောက် (-an) သည်
+            # မူရင်း Video အပိုင်းကို Narrator အသံအရှည်နှင့် ကွက်တိဖြစ်အောင် Speed ညှိပြီး မူရင်းအသံကို လုံးဝဖျောက် (-an) သည်
             pts_factor = tts_dur / orig_dur
             v_seg_path = job_dir / f"vseg_{seg['index']:04d}.mp4"
             await asyncio.to_thread(
@@ -431,7 +482,7 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
                     "ffmpeg", "-y",
                     "-ss", str(seg["start"]), "-to", str(seg["end"]),
                     "-i", str(video_path),
-                    "-an",
+                    "-an",  # မူရင်းရုပ်ရှင်အသံ လုံးဝဖျောက်ပစ်ခြင်း
                     "-vf", f"setpts={pts_factor:.4f}*PTS",
                     "-r", "24", "-c:v", "libx264", "-preset", "ultrafast",
                     str(v_seg_path),
@@ -471,25 +522,32 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(a_list_txt), "-c", "copy", str(merged_audio)],
         )
 
-        # Output Resolution သတ်မှတ်ခြင်း
+        # Output Resolution တွက်ချက်ခြင်း
         hd_1080 = cfg.get("tiktok_hd", False)
         ratio = cfg.get("ratio", "Original")
-        base_h = 1080 if hd_1080 else 720
-        ratio_dims = {
-            "9:16": (base_h, int(base_h * 16 / 9)),
-            "1:1": (base_h, base_h),
-            "4:5": (base_h, int(base_h * 5 / 4)),
-            "16:9": (int(base_h * 16 / 9), base_h),
-        }
-        out_w, out_h = ratio_dims.get(ratio, (1280 if hd_1080 else 854, 720 if hd_1080 else 480))
-        out_w = out_w - (out_w % 2)
-        out_h = out_h - (out_h % 2)
+        base_dim = 1080 if hd_1080 else 720
+
+        if ratio == "9:16":
+            out_w, out_h = base_dim, int(base_dim * 16 / 9)
+        elif ratio == "1:1":
+            out_w, out_h = base_dim, base_dim
+        elif ratio == "4:5":
+            out_w, out_h = base_dim, int(base_dim * 5 / 4)
+        elif ratio == "16:9":
+            out_w, out_h = int(base_dim * 16 / 9), base_dim
+        else:
+            scale_factor = (1080 / orig_h) if (hd_1080 and orig_h < 1080) else 1.0
+            out_w = int(orig_w * scale_factor)
+            out_h = int(orig_h * scale_factor)
+
+        out_w -= out_w % 2
+        out_h -= out_h % 2
 
         ass_path = job_dir / "captions.ass"
         build_ass_subtitles(caption_events, cfg, out_w, out_h, ass_path)
 
         # ---------------------------------------------------------
-        # 7. Render video (FFmpeg Visual Effects, Captions, Watermark)
+        # 7. Render video (FFmpeg Visual Effects, Blur, Captions, Watermark, Round Logo)
         # ---------------------------------------------------------
         update_job_step(job_id, "render_video", 85)
         vf_filters = []
@@ -508,17 +566,30 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
         if cfg.get("mirror", False):
             vf_filters.append("hflip")
 
-        # Ratio Fit: Crop (fill) or Pad (blur bg)
+        # Ratio & Fit Mode: Crop (fill) vs Pad (blur bg)
+        fit_mode = cfg.get("fit_mode", "crop")
         if ratio != "Original":
-            vf_filters.append(
-                f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h}"
-            )
+            if fit_mode == "pad":
+                # Pad (blur bg): နောက်ခံကို Blur ခင်းပြီး အပေါ်မှ မူရင်း Video တင်ခြင်း
+                vf_filters.append(
+                    f"split[original][copy];"
+                    f"[copy]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},boxblur=20:10[blurred];"
+                    f"[original]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[scaled];"
+                    f"[blurred][scaled]overlay=(W-w)/2:(H-h)/2"
+                )
+            else:
+                # Crop (fill)
+                vf_filters.append(
+                    f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h}"
+                )
+        else:
+            vf_filters.append(f"scale={out_w}:{out_h}")
 
-        # Full band (cover original subtitles)
-        if cfg.get("full_band", False):
-            vf_filters.append("drawbox=x=0:y=ih*0.80:w=iw:h=ih*0.16:color=black@0.75:t=fill")
+        # Blur boxes သို့မဟုတ် Full band (cover original subtitles)
+        if cfg.get("full_band", False) or int(cfg.get("blur_boxes", 0)) > 0:
+            vf_filters.append("drawbox=x=0:y=ih*0.78:w=iw:h=ih*0.16:color=black@0.75:t=fill")
 
-        # TikTok HD Sharpening
+        # TikTok HD (1080p) Sharpening
         if hd_1080:
             vf_filters.append("unsharp=5:5:0.8:3:3:0.4")
 
@@ -545,9 +616,32 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
         final_video = job_dir / "final_recap.mp4"
         vf_chain = ",".join(vf_filters) if vf_filters else "null"
 
-        await asyncio.to_thread(
-            run_cmd,
-            [
+        # Round Logo ပါဝင်ပါက Overlay ထပ်တင်ခြင်း
+        if logo_path and logo_path.exists():
+            filter_complex = (
+                f"[0:v]{vf_chain}[vmain];"
+                f"[2:v]scale=96:96,format=yuva420p,"
+                f"geq=lum='p(X,Y)':a='if(lte(hypot(X-48,Y-48),48),255,0)'[vlogo];"
+                f"[vmain][vlogo]overlay=W-w-24:24[vout]"
+            )
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(merged_raw),
+                "-i", str(merged_audio),
+                "-i", str(logo_path),
+                "-filter_complex", filter_complex,
+                "-map", "[vout]",
+                "-map", "1:a:0",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20" if hd_1080 else "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-shortest",
+                str(final_video),
+            ]
+        else:
+            ffmpeg_cmd = [
                 "ffmpeg", "-y",
                 "-i", str(merged_raw),
                 "-i", str(merged_audio),
@@ -561,10 +655,11 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
                 "-b:a", "128k",
                 "-shortest",
                 str(final_video),
-            ],
-        )
+            ]
 
-        # Done!
+        await asyncio.to_thread(run_cmd, ffmpeg_cmd)
+
+        # Process အားလုံး ပြီးမြောက်ခြင်း
         for k in JOBS[job_id]["steps"]:
             JOBS[job_id]["steps"][k] = "done"
         JOBS[job_id]["progress"] = 100
@@ -576,6 +671,9 @@ async def process_recap_pipeline(job_id: str, video_path: Path, cfg: Dict[str, A
         JOBS[job_id]["error"] = str(e)
 
 
+# -------------------------------------------------------------------------
+# FASTAPI ENDPOINTS
+# -------------------------------------------------------------------------
 @app.post("/api/voice-preview")
 async def voice_preview(
     voice_name: str = Form("Thiha"),
@@ -644,7 +742,7 @@ async def start_recap(
 
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    """Frontend မှ စက္ကန့်တိုင်း လှမ်းမေးမည့် Progress Status Endpoint"""
+    """Frontend မှ ၂ စက္ကန့်တစ်ကြိမ် လှမ်းမေးမည့် Progress Status Endpoint"""
     if job_id not in JOBS:
         raise HTTPException(status_code=404, detail="Job not found")
     job = JOBS[job_id]
@@ -663,6 +761,6 @@ async def download_video(job_id: str):
     return FileResponse(final_video, media_type="video/mp4", filename=f"recap_{job_id}.mp4")
 
 
-# Frontend UI ကို Serve လုပ်ခြင်း
+# Frontend UI (static/index.html) ကို Serve လုပ်ခြင်း
 Path("static").mkdir(exist_ok=True)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
