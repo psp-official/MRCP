@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AI Movie Recap Narrator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Padauk:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', 'Padauk', sans-serif;
+      background-color: #f4f7fb;
+      color: #0f172a;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* Custom Toggle Switch */
+    .toggle-checkbox:checked {
+      right: 0;
+      border-color: #2563eb;
+    }
+    .toggle-checkbox:checked + .toggle-label {
+      background-color: #2563eb;
+    }
+    /* Custom Range Slider */
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      background: #cbd5e1;
+      height: 6px;
+      border-radius: 999px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      margin-top: -7px;
+      background-color: #ffffff;
+      border: 2.5px solid #2563eb;
+      height: 20px;
+      width: 20px;
+      border-radius: 999px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .caption-preview-text {
+      text-shadow: 
+        -2px -2px 0 var(--outline-color, #000),
+         2px -2px 0 var(--outline-color, #000),
+        -2px  2px 0 var(--outline-color, #000),
+         2px  2px 0 var(--outline-color, #000),
+         0px  2px 4px rgba(0,0,0,0.6);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex justify-center bg-slate-100">
+
+  <!-- Main Mobile/App Container -->
+  <div class="w-full max-w-md bg-[#f5f8fc] min-h-screen flex flex-col pb-24 relative shadow-xl">
+
+    <!-- ================= 1. TOP HEADER ================= -->
+    <header class="flex items-center justify-between px-4 py-3 bg-[#f5f8fc] sticky top-0 z-30">
+      <div class="flex items-center gap-3 min-w-0">
+        <button class="text-slate-600 p-1 hover:bg-slate-200 rounded-lg">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+        </button>
+        <div class="truncate">
+          <div id="headerFilename" class="font-bold text-slate-900 text-base truncate">1000083797.mp4</div>
+          <div id="headerMeta" class="text-xs text-slate-500">0:00 · 1280×720</div>
+        </div>
+      </div>
+      <button onclick="openKeyModal()" class="px-4 py-1.5 bg-white border border-slate-200 rounded-full text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 active:scale-95 transition">
+        Own key
+      </button>
+    </header>
+
+    <!-- ================= 2. INTERACTIVE VIDEO PREVIEW ================= -->
+    <div class="px-3">
+      <div id="videoStage" class="relative w-full aspect-video bg-slate-900 rounded-2xl overflow-hidden shadow-md">
+        <video id="videoPlayer" class="w-full h-full object-contain" playsinline></video>
+
+        <!-- Placeholder Background when no video uploaded yet -->
+        <div id="videoPlaceholder" class="absolute inset-0 bg-gradient-to-b from-amber-900/60 via-amber-800/50 to-stone-900 flex items-center justify-center">
+          <span class="text-white/70 text-xs font-medium">ဗီဒီယိုဖိုင် ရွေးချယ်ရန် (+) ကိုနှိပ်ပါ</span>
+        </div>
+
+        <!-- Top Overlay Buttons (+ Upload, Crop, Check) -->
+        <div class="absolute top-3 inset-x-3 flex items-center justify-between z-20 pointer-events-none">
+          <label for="videoInput" class=" pointer-events-auto w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm text-white flex items-center justify-center cursor-pointer hover:bg-black/70 transition">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m-7-7h14"/>
+            </svg>
+          </label>
+          <input id="videoInput" type="file" accept="video/*" class="hidden" onchange="handleVideoSelect(event)" />
+
+          <button onclick="toggleCropOverlay()" class="pointer-events-auto w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/70 transition" title="Crop">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2"/>
+            </svg>
+          </button>
+
+          <button class="pointer-events-auto w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-md">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Blur Boxes Container -->
+        <div id="blurBoxesLayer" class="absolute inset-0 pointer-events-none z-10"></div>
+
+        <!-- Full Band Subtitle Cover Preview -->
+        <div id="fullBandPreview" class="hidden absolute inset-x-0 bottom-[6%] h-[16%] bg-black/75 backdrop-blur-md z-10 pointer-events-none"></div>
+
+        <!-- Watermark Live Preview -->
+        <div id="watermarkPreview" class="hidden absolute right-4 bottom-8 text-white font-semibold pointer-events-none z-20" style="font-size: 14px; opacity: 0.65;">
+          DeepRecap
+        </div>
+
+        <!-- Draggable Caption Preview Box -->
+        <div id="captionBox" class="absolute left-1/2 -translate-x-1/2 bottom-[8%] w-[94%] border border-dashed border-white/85 rounded-full py-1.5 px-4 flex items-center justify-center cursor-move z-20 bg-black/15"
+             style="top: 78%;">
+          <span id="captionPreviewText" class="caption-preview-text font-bold text-center leading-tight select-none"
+                style="color: #ffff00; font-size: 19px; --outline-color: #000000;">
+            ဒီနေရာမှာ စာတန်းထိုး ပေါ်မယ်
+          </span>
+          <!-- Right Resize Handle Dot -->
+          <div id="captionResizeDot" class="w-4 h-4 rounded-full bg-white border-2 border-blue-500 absolute right-1.5 top-1/2 -translate-y-1/2 shadow cursor-ew-resize"></div>
+        </div>
+      </div>
+
+      <!-- Video Player Seekbar -->
+      <div class="mt-2 bg-slate-500/90 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
+        <button onclick="togglePlayVideo()" id="playPauseBtn" class="text-white focus:outline-none">
+          <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <input id="videoSeek" type="range" min="0" max="100" value="0" class="w-full accent-blue-500" oninput="seekVideo(this.value)" />
+        <span id="videoTimeText" class="text-xs font-semibold whitespace-nowrap">0:00 / 3:51</span>
+        <button onclick="fullscreenVideo()" class="text-white/80 hover:text-white">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================= 3. FOUR TABS NAVIGATION ================= -->
+    <div class="px-3 mt-3">
+      <div class="bg-slate-200/80 p-1 rounded-2xl grid grid-cols-4 gap-1 text-sm font-semibold">
+        <button onclick="switchTab('video')" id="tabBtn-video" class="py-2 rounded-xl bg-white text-slate-900 shadow-sm transition">Video</button>
+        <button onclick="switchTab('voice')" id="tabBtn-voice" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Voice</button>
+        <button onclick="switchTab('captions')" id="tabBtn-captions" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Captions</button>
+        <button onclick="switchTab('extras')" id="tabBtn-extras" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Extras</button>
+      </div>
+    </div>
+
+    <!-- ================= 4. TAB PANELS ================= -->
+    <div class="px-3 mt-3 space-y-3 flex-1">
+
+      <!-- ==================== TAB 1: VIDEO ==================== -->
+      <div id="tab-video" class="space-y-3 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Mode</label>
+          <div class="grid grid-cols-3 gap-2 mt-1.5">
+            <!-- AI Recap -->
+            <div onclick="selectMode('AI Recap')" id="modeCard-AI Recap" class="cursor-pointer border-2 border-blue-500 bg-blue-50/40 rounded-2xl p-2.5 relative">
+              <div class="w-4 h-4 rounded-full border-2 border-blue-600 flex items-center justify-center mb-2">
+                <div class="w-2 h-2 rounded-full bg-blue-600"></div>
+              </div>
+              <div class="font-bold text-sm text-slate-900">AI Recap</div>
+              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Burmese voice + captions</div>
+            </div>
+            <!-- Pro AI Recap -->
+            <div onclick="selectMode('Pro AI Recap')" id="modeCard-Pro AI Recap" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5 relative">
+              <div class="flex items-center justify-between mb-2">
+                <div class="w-4 h-4 rounded-full border-2 border-slate-300"></div>
+                <span class="bg-slate-900 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">PRO</span>
+              </div>
+              <div class="font-bold text-sm text-slate-900">Pro AI Recap</div>
+              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Any language · better</div>
+            </div>
+            <!-- Subtitle -->
+            <div onclick="selectMode('Subtitle')" id="modeCard-Subtitle" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5 relative">
+              <div class="w-4 h-4 rounded-full border-2 border-slate-300 mb-2"></div>
+              <div class="font-bold text-sm text-slate-900">Subtitle</div>
+              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Original audio + captions</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ratio -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Ratio</label>
+          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-5 gap-1 mt-1 text-xs font-semibold">
+            <button onclick="selectRatio('Original')" id="ratioBtn-Original" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Original</button>
+            <button onclick="selectRatio('9:16')" id="ratioBtn-9:16" class="py-2 rounded-lg text-slate-600">9:16</button>
+            <button onclick="selectRatio('1:1')" id="ratioBtn-1:1" class="py-2 rounded-lg text-slate-600">1:1</button>
+            <button onclick="selectRatio('4:5')" id="ratioBtn-4:5" class="py-2 rounded-lg text-slate-600">4:5</button>
+            <button onclick="selectRatio('16:9')" id="ratioBtn-16:9" class="py-2 rounded-lg text-slate-600">16:9</button>
+          </div>
+        </div>
+
+        <!-- Output Language -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Output language</label>
+          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
+            <button onclick="selectOutLang('မြန်မာ')" id="outLang-မြန်မာ" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">မြန်မာ</button>
+            <button onclick="selectOutLang('English')" id="outLang-English" class="py-2 rounded-lg text-slate-400">English</button>
+            <button onclick="selectOutLang('ไทย')" id="outLang-ไทย" class="py-2 rounded-lg text-slate-400">ไทย</button>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1.5">AI Recap makes Burmese only — choose Pro AI Recap for English or Thai.</p>
+        </div>
+
+        <!-- How the video fits -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">How the video fits</label>
+          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-2 gap-1 mt-1 text-xs font-semibold">
+            <button onclick="selectFit('crop')" id="fitBtn-crop" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Crop (fill)</button>
+            <button onclick="selectFit('pad')" id="fitBtn-pad" class="py-2 rounded-lg text-slate-600">Pad (blur bg)</button>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1">Drag on the video to choose the area (free crop)</p>
+        </div>
+
+        <!-- Video Switches -->
+        <div class="space-y-2 pt-1">
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <div>
+              <div class="text-sm font-bold text-slate-800">TikTok HD (1080p)</div>
+              <div class="text-[11px] text-slate-500">Sharper · slower render · bigger file</div>
+            </div>
+            <input type="checkbox" id="chkTiktokHd" class="w-11 h-6 accent-blue-600 rounded-full cursor-pointer" onchange="state.tiktok_hd=this.checked; updateSummary();" />
+          </div>
+
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <div class="text-sm font-bold text-slate-800">Mirror (flip left/right)</div>
+            <input type="checkbox" id="chkMirror" checked class="w-11 h-6 accent-blue-600 rounded-full cursor-pointer" onchange="toggleMirror(this.checked)" />
+          </div>
+
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <div class="text-sm font-bold text-slate-800">Random 4px crop</div>
+            <input type="checkbox" id="chkRandomCrop" class="w-11 h-6 accent-blue-600 rounded-full cursor-pointer" onchange="state.random_4px_crop=this.checked" />
+          </div>
+        </div>
+
+        <div class="p-2.5 bg-slate-50 rounded-xl text-xs text-slate-500 border border-slate-100">
+          Drag on the video to crop — press the "Crop" pill above the picture.
+        </div>
+
+        <!-- Zoom Slider -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Zoom</span>
+            <span id="zoomValText" class="text-blue-600">100%</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('zoomRange', -5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
+            <input id="zoomRange" type="range" min="100" max="150" value="100" class="flex-1" oninput="updateZoom(this.value)" />
+            <button onclick="adjustSlider('zoomRange', 5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
+          </div>
+        </div>
+
+        <!-- Source Language -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Source language</label>
+          <select id="sourceLangSelect" onchange="state.source_language=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800">
+            <option value="Auto-detect">Auto-detect</option>
+            <option value="zh">Chinese (Mandarin)</option>
+            <option value="en">English</option>
+            <option value="ko">Korean</option>
+            <option value="ja">Japanese</option>
+            <option value="th">Thai</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 2: VOICE ==================== -->
+      <div id="tab-voice" class="hidden space-y-4 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+        <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
+          <span>Voice</span>
+          <span id="voiceCountLabel">2 မြန်မာ voices</span>
+        </div>
+
+        <!-- Selected Voice Card -->
+        <div class="border border-blue-200 bg-blue-50/20 rounded-2xl p-3 flex items-center justify-between">
+          <div onclick="toggleVoiceDropdown()" class="flex items-center gap-3 cursor-pointer flex-1">
+            <div id="selectedVoiceAvatar" class="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-sm">T</div>
+            <div>
+              <div id="selectedVoiceTitle" class="font-bold text-sm text-slate-900">Thiha</div>
+              <div id="selectedVoiceSub" class="text-xs text-slate-500">Male · Myanmar (Burma)</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="toggleVoiceDropdown()" class="p-1 text-slate-500">⌃</button>
+            <button onclick="playVoiceSample(state.voice_name)" id="voicePlayBtn" class="w-9 h-9 rounded-full bg-blue-50 text-blue-700 flex items-center justify-center hover:bg-blue-100">
+              ▶
+            </button>
+          </div>
+        </div>
+
+        <!-- Expandable Voice List -->
+        <div id="voicePickerBox" class="border border-slate-200 rounded-2xl p-3 space-y-3">
+          <div class="flex gap-2">
+            <input id="voiceSearchInput" type="text" placeholder="Search voices..." oninput="renderVoiceList()" class="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-slate-50" />
+            <div class="bg-slate-100 p-1 rounded-xl flex text-xs font-semibold">
+              <button onclick="setGenderFilter('All')" id="gFilter-All" class="px-2.5 py-1 rounded-lg bg-white shadow-sm">All</button>
+              <button onclick="setGenderFilter('Male')" id="gFilter-Male" class="px-2.5 py-1 rounded-lg text-slate-600">Male</button>
+              <button onclick="setGenderFilter('Female')" id="gFilter-Female" class="px-2.5 py-1 rounded-lg text-slate-600">Female</button>
+            </div>
+          </div>
+          <div class="text-xs font-semibold text-slate-500">Myanmar (Burma) · 2</div>
+          <div id="voiceListContainer" class="space-y-1.5"></div>
+        </div>
+
+        <!-- Speed -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Speed</span>
+            <span id="speedValText" class="text-blue-600">+30%</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('speedRange', -5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
+            <input id="speedRange" type="range" min="-20" max="60" value="30" class="flex-1" oninput="updateVoiceSpeed(this.value)" />
+            <button onclick="adjustSlider('speedRange', 5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
+          </div>
+        </div>
+
+        <!-- Pitch -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Pitch</span>
+            <span id="pitchValText" class="text-blue-600">+0Hz</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('pitchRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
+            <input id="pitchRange" type="range" min="-20" max="20" value="0" class="flex-1" oninput="updateVoicePitch(this.value)" />
+            <button onclick="adjustSlider('pitchRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 3: CAPTIONS ==================== -->
+      <div id="tab-captions" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+        <!-- Blur Boxes -->
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+          <div>
+            <div id="blurCountTitle" class="text-sm font-bold text-slate-800">0 blur box(es)</div>
+            <div class="text-[11px] text-slate-500">Draw on the video, drag to move</div>
+          </div>
+          <button onclick="addBlurBox()" class="px-3.5 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl hover:bg-blue-100">+ Add</button>
+        </div>
+
+        <!-- Full Band -->
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+          <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
+          <input type="checkbox" class="w-11 h-6 accent-blue-600 cursor-pointer" onchange="toggleFullBand(this.checked)" />
+        </div>
+
+        <!-- Captions Toggle -->
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+          <div class="text-sm font-bold text-slate-800">Captions</div>
+          <input type="checkbox" checked class="w-11 h-6 accent-blue-600 cursor-pointer" onchange="toggleCaptionsOn(this.checked)" />
+        </div>
+
+        <!-- Font -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Font</label>
+          <select onchange="state.font=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold">
+            <option value="A13 WenYoe">A13 WenYoe</option>
+            <option value="Padauk">Padauk Bold</option>
+            <option value="Pyidaungsu">Pyidaungsu</option>
+          </select>
+        </div>
+
+        <!-- Text Size -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Text size</span>
+            <span id="textSizeVal" class="text-blue-600">30px</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('textSizeRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+            <input id="textSizeRange" type="range" min="16" max="48" value="30" class="flex-1" oninput="updateCaptionSize(this.value)" />
+            <button onclick="adjustSlider('textSizeRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+          </div>
+        </div>
+
+        <!-- Text Colour Swatches -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Text colour</label>
+          <div class="flex items-center gap-3 mt-2">
+            <button onclick="setCaptionColor('#FFFFFF')" class="w-8 h-8 rounded-full bg-white border-2 border-slate-300"></button>
+            <button onclick="setCaptionColor('#FFFF00')" class="w-8 h-8 rounded-full bg-[#FFFF00] ring-2 ring-offset-2 ring-slate-800"></button>
+            <button onclick="setCaptionColor('#7DD3FC')" class="w-8 h-8 rounded-full bg-[#7DD3FC]"></button>
+            <button onclick="setCaptionColor('#F472B6')" class="w-8 h-8 rounded-full bg-[#F472B6]"></button>
+            <button onclick="setCaptionColor('#86EFAC')" class="w-8 h-8 rounded-full bg-[#86EFAC]"></button>
+            <button onclick="setCaptionColor('#FB923C')" class="w-8 h-8 rounded-full bg-[#FB923C]"></button>
+            <input type="color" value="#ffff00" onchange="setCaptionColor(this.value)" class="w-8 h-8 rounded-full cursor-pointer border-0 bg-transparent" />
+          </div>
+        </div>
+
+        <!-- Outline Colour -->
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+          <span class="text-sm font-bold text-slate-800">Outline colour</span>
+          <input type="color" value="#000000" onchange="setOutlineColor(this.value)" class="w-10 h-7 rounded cursor-pointer border border-slate-300" />
+        </div>
+
+        <!-- Outline Width -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Outline width</span>
+            <span id="outlineWVal" class="text-blue-600">3px</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('outlineWRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+            <input id="outlineWRange" type="range" min="0" max="8" value="3" class="flex-1" oninput="state.outline_width=this.value; document.getElementById('outlineWVal').innerText=this.value+'px'" />
+            <button onclick="adjustSlider('outlineWRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+          </div>
+        </div>
+
+        <!-- Bold & Box -->
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+          <span class="text-sm font-bold text-slate-800">Bold</span>
+          <input type="checkbox" checked class="w-11 h-6 accent-blue-600" onchange="state.bold=this.checked" />
+        </div>
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+          <span class="text-sm font-bold text-slate-800">Box (background)</span>
+          <input type="checkbox" class="w-11 h-6 accent-blue-600" onchange="toggleCaptionBgBox(this.checked)" />
+        </div>
+
+        <!-- Position -->
+        <div>
+          <label class="text-xs font-semibold text-slate-500">Position</label>
+          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
+            <button onclick="setCapPosPreset(89, 'Bottom')" id="posBtn-Bottom" class="py-2 rounded-lg text-slate-600">Bottom</button>
+            <button onclick="setCapPosPreset(50, 'Middle')" id="posBtn-Middle" class="py-2 rounded-lg text-slate-600">Middle</button>
+            <button onclick="setCapPosPreset(state.vertical_position, 'Custom')" id="posBtn-Custom" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Custom</button>
+          </div>
+        </div>
+
+        <!-- Vertical Position -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Vertical position</span>
+            <span id="vertPosVal" class="text-blue-600">89%</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('vertPosRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+            <input id="vertPosRange" type="range" min="10" max="95" value="89" class="flex-1" oninput="updateVerticalPos(this.value)" />
+            <button onclick="adjustSlider('vertPosRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+          </div>
+        </div>
+
+        <!-- Words per caption -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Words per caption</span>
+            <span id="wordsCapVal" class="text-blue-600">9</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('wordsCapRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+            <input id="wordsCapRange" type="range" min="3" max="16" value="9" class="flex-1" oninput="state.words_per_caption=this.value; document.getElementById('wordsCapVal').innerText=this.value" />
+            <button onclick="adjustSlider('wordsCapRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+          </div>
+          <p class="text-[11px] text-amber-700 font-medium mt-1">Cannot be changed after the video is made — set it now</p>
+        </div>
+
+        <!-- Caption Width -->
+        <div>
+          <div class="flex justify-between text-sm font-bold mb-1.5">
+            <span>Caption width</span>
+            <span id="capWidthVal" class="text-blue-600">96%</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="adjustSlider('capWidthRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+            <input id="capWidthRange" type="range" min="50" max="100" value="96" class="flex-1" oninput="updateCaptionWidth(this.value)" />
+            <button onclick="adjustSlider('capWidthRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 4: EXTRAS ==================== -->
+      <div id="tab-extras" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+        <!-- Watermark Text Toggle -->
+        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-bold text-slate-800">Watermark text</span>
+            <input type="checkbox" id="chkWatermark" class="w-11 h-6 accent-blue-600 cursor-pointer" onchange="toggleWatermark(this.checked)" />
+          </div>
+
+          <div id="watermarkControls" class="hidden space-y-3 pt-1">
+            <div>
+              <input type="text" id="watermarkInput" value="DeepRecap" oninput="updateWatermarkText(this.value)"
+                     class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold" />
+              <p class="text-[11px] text-slate-500 mt-1">English only (A–Z, numbers, symbols)</p>
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs font-bold mb-1">
+                <span>Text size</span>
+                <span id="wmSizeVal" class="text-blue-600">17px</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="adjustSlider('wmSizeRange', -1)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                <input id="wmSizeRange" type="range" min="10" max="36" value="17" class="flex-1" oninput="state.watermark_size=this.value; document.getElementById('wmSizeVal').innerText=this.value+'px'" />
+                <button onclick="adjustSlider('wmSizeRange', 1)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs font-bold mb-1">
+                <span>Opacity</span>
+                <span id="wmOpVal" class="text-blue-600">65%</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="adjustSlider('wmOpRange', -5)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                <input id="wmOpRange" type="range" min="10" max="100" value="65" class="flex-1" oninput="state.watermark_opacity=this.value; document.getElementById('wmOpVal').innerText=this.value+'%'; document.getElementById('watermarkPreview').style.opacity=this.value/100" />
+                <button onclick="adjustSlider('wmOpRange', 5)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between pt-1">
+              <span class="text-xs font-bold text-slate-700">Move around the screen</span>
+              <input type="checkbox" class="w-10 h-5 accent-blue-600" onchange="state.watermark_move=this.checked" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Logo (round) -->
+        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm font-bold text-slate-800">Logo (round)</div>
+              <div class="text-[11px] text-slate-500">PNG / JPG</div>
+            </div>
+            <input type="checkbox" class="w-11 h-6 accent-blue-600" onchange="document.getElementById('logoUploadBox').classList.toggle('hidden', !this.checked)" />
+          </div>
+          <div id="logoUploadBox" class="hidden pt-2">
+            <input type="file" id="logoInput" accept="image/png,image/jpeg" class="text-xs text-slate-600" />
+          </div>
+        </div>
+
+        <!-- AI caption + hashtags -->
+        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm font-bold text-slate-800">AI caption + hashtags</div>
+              <div class="text-[11px] text-slate-500">TikTok caption · hashtags · thumbnail</div>
+            </div>
+            <input type="checkbox" checked class="w-11 h-6 accent-blue-600" onchange="state.ai_hashtags=this.checked" />
+          </div>
+
+          <textarea id="hashtagsInput" rows="2" oninput="state.default_hashtags=this.value"
+                    class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700">#shortdramareview #myanmartiktok🇲🇲 #ဘာသာပြန်ဇာတ်လမ်းများ</textarea>
+
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-bold text-slate-800">Add #fyp</span>
+            <input type="checkbox" checked class="w-11 h-6 accent-blue-600" onchange="state.add_fyp=this.checked" />
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 5. STICKY BOTTOM SUMMARY & START BAR ================= -->
+    <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-3 flex items-center justify-between z-30">
+      <div class="min-w-0 pr-2">
+        <div id="summaryTopLine" class="text-xs font-bold text-slate-900 truncate">Using your own API keys · 3:51</div>
+        <div id="summaryBottomLine" class="text-[11px] text-slate-500 truncate">Original ratio · Blur 0 · Captions on · မြန်မာ</div>
+      </div>
+      <button onclick="startRecapJob()" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-sm rounded-full flex items-center gap-2 shadow-md transition">
+        <span>▶</span>
+        <span>Start</span>
+      </button>
+    </div>
+
+  </div>
+
+  <!-- ================= 6. "OWN KEY" API KEYS MODAL ================= -->
+  <div id="keyModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-base text-slate-900">Own API Keys ထည့်သွင်းရန်</h3>
+        <button onclick="closeKeyModal()" class="text-slate-400 hover:text-slate-600 text-lg font-bold">✕</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="font-bold text-slate-700 block mb-1">AssemblyAI API Key</label>
+          <input id="inputAssemblyKey" type="password" placeholder="AssemblyAI key ထည့်ပါ..."
+                 class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-blue-500" />
+        </div>
+
+        <div>
+          <label class="font-bold text-slate-700 block mb-1">OpenRouter API Key</label>
+          <input id="inputOpenRouterKey" type="password" placeholder="sk-or-v1-..."
+                 class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-blue-500" />
+        </div>
+
+        <div>
+          <label class="font-bold text-slate-700 block mb-1">OpenRouter Model</label>
+          <select id="inputOpenRouterModel" class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 font-semibold">
+            <option value="google/gemini-2.5-flash">google/gemini-2.5-flash (Fast & Natural)</option>
+            <option value="google/gemini-2.5-pro">google/gemini-2.5-pro (Best Burmese Recap)</option>
+            <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
+            <option value="deepseek/deepseek-chat">deepseek/deepseek-chat</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeKeyModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100">Cancel</button>
+        <button onclick="saveApiKeys()" class="px-5 py-2 rounded-xl text-xs font-bold text-white bg-blue-600 shadow">Save Keys</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 7. 7-STEP RENDER PROGRESS MODAL (IMAGE 1) ================= -->
+  <div id="progressModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+    <div class="bg-[#f8fafc] w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-slate-100 space-y-4">
+      <!-- Top Title & Percentage -->
+      <div class="flex items-start justify-between">
+        <div class="flex items-center gap-3 min-w-0">
+          <div id="topSpinner" class="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
+          <div class="min-w-0">
+            <div id="progStepTitle" class="font-extrabold text-lg text-slate-900 leading-tight">Extract audio</div>
+            <div id="progSubMeta" class="text-xs text-slate-500 truncate">video.mp4 · AI Recap · Or...</div>
+          </div>
+        </div>
+        <div id="progPercentText" class="text-3xl font-extrabold text-blue-600">0%</div>
+      </div>
+
+      <!-- Progress Bar -->
+      <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+        <div id="progBarFill" class="h-full bg-blue-600 rounded-full transition-all duration-500" style="width: 5%"></div>
+      </div>
+
+      <!-- Elapsed & Left -->
+      <div class="flex justify-between text-xs font-medium text-slate-500">
+        <span id="progElapsed">Elapsed 0:00</span>
+        <span id="progEta">About --:-- left</span>
+      </div>
+
+      <!-- 7 Steps Checklist -->
+      <div id="stepListContainer" class="space-y-2 pt-1 text-sm font-semibold"></div>
+
+      <!-- Completed Download & AI Caption Box -->
+      <div id="completedActions" class="hidden pt-3 space-y-3 border-t border-slate-200">
+        <div id="aiCaptionResultBox" class="hidden p-2.5 bg-slate-100 rounded-xl text-xs text-slate-700 whitespace-pre-wrap"></div>
+        <div class="flex gap-2">
+          <a id="downloadVideoBtn" href="#" download class="flex-1 py-2.5 bg-emerald-600 text-white text-center rounded-xl font-bold text-sm shadow">
+            ⬇ Download Video
+          </a>
+          <button onclick="document.getElementById('progressModal').classList.add('hidden')" class="px-4 py-2.5 bg-slate-200 text-slate-700 rounded-xl font-bold text-xs">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= JAVASCRIPT LOGIC ================= -->
+  <script>
+    const VOICES = [
+      { name: "Thiha", gender: "Male", lang: "မြန်မာ", label: "Myanmar (Burma)" },
+      { name: "Nilar", gender: "Female", lang: "မြန်မာ", label: "Myanmar (Burma)" },
+      { name: "Guy", gender: "Male", lang: "English", label: "English (US)" },
+      { name: "Jenny", gender: "Female", lang: "English", label: "English (US)" },
+      { name: "Niwat", gender: "Male", lang: "ไทย", label: "Thai (Thailand)" },
+      { name: "Premwadee", gender: "Female", lang: "ไทย", label: "Thai (Thailand)" }
+    ];
+
+    const STEP_LABELS = [
+      { key: "extract_audio", label: "Extract audio" },
+      { key: "upload", label: "Upload" },
+      { key: "transcribe", label: "Transcribe" },
+      { key: "translate", label: "Translate" },
+      { key: "voice", label: "Voice" },
+      { key: "timeline_captions", label: "Timeline + captions" },
+      { key: "render_video", label: "Render video" }
+    ];
+
+    let selectedVideoFile = null;
+    let genderFilter = "All";
+
+    const state = {
+      mode: "AI Recap",
+      ratio: "Original",
+      output_language: "မြန်မာ",
+      fit_mode: "crop",
+      tiktok_hd: false,
+      mirror: true,
+      random_4px_crop: false,
+      zoom: 100,
+      source_language: "Auto-detect",
+      voice_name: "Thiha",
+      voice_speed: 30,
+      voice_pitch: 0,
+      blur_boxes: 0,
+      full_band: false,
+      captions_on: true,
+      font: "A13 WenYoe",
+      text_size: 30,
+      text_color: "#FFFF00",
+      outline_color: "#000000",
+      outline_width: 3,
+      bold: true,
+      box_bg: false,
+      vertical_position: 89,
+      words_per_caption: 9,
+      caption_width: 96,
+      watermark_on: false,
+      watermark_text: "DeepRecap",
+      watermark_size: 17,
+      watermark_opacity: 65,
+      watermark_move: false,
+      ai_hashtags: true,
+      default_hashtags: "#shortdramareview #myanmartiktok🇲🇲 #ဘာသာပြန်ဇာတ်လမ်းများ",
+      add_fyp: true,
+      assemblyai_key: localStorage.getItem("aai_key") || "",
+      openrouter_key: localStorage.getItem("or_key") || "",
+      openrouter_model: localStorage.getItem("or_model") || "google/gemini-2.5-flash"
+    };
+
+    // Initialize UI
+    window.addEventListener("DOMContentLoaded", () => {
+      renderVoiceList();
+      initDraggableCaption();
+      updateSummary();
+    });
+
+    function switchTab(tab) {
+      ["video", "voice", "captions", "extras"].forEach(t => {
+        document.getElementById(`tab-${t}`).classList.toggle("hidden", t !== tab);
+        const btn = document.getElementById(`tabBtn-${t}`);
+        if (t === tab) {
+          btn.className = "py-2 rounded-xl bg-white text-slate-900 shadow-sm transition";
+        } else {
+          btn.className = "py-2 rounded-xl text-slate-600 hover:text-slate-900 transition";
+        }
+      });
+    }
+
+    function handleVideoSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      selectedVideoFile = file;
+      document.getElementById("headerFilename").innerText = file.name;
+      const url = URL.createObjectURL(file);
+      const vp = document.getElementById("videoPlayer");
+      vp.src = url;
+      document.getElementById("videoPlaceholder").classList.add("hidden");
+      vp.onloadedmetadata = () => {
+        const dur = formatSec(vp.duration);
+        document.getElementById("headerMeta").innerText = `${dur} · ${vp.videoWidth}×${vp.videoHeight}`;
+        document.getElementById("videoTimeText").innerText = `0:00 / ${dur}`;
+        updateSummary(dur);
+      };
+      vp.ontimeupdate = () => {
+        const cur = formatSec(vp.currentTime);
+        const tot = formatSec(vp.duration || 0);
+        document.getElementById("videoTimeText").innerText = `${cur} / ${tot}`;
+        document.getElementById("videoSeek").value = vp.duration ? (vp.currentTime / vp.duration) * 100 : 0;
+      };
+    }
+
+    function togglePlayVideo() {
+      const vp = document.getElementById("videoPlayer");
+      if (!vp.src) return;
+      if (vp.paused) vp.play(); else vp.pause();
+    }
+
+    function seekVideo(val) {
+      const vp = document.getElementById("videoPlayer");
+      if (vp.duration) vp.currentTime = (val / 100) * vp.duration;
+    }
+
+    function fullscreenVideo() {
+      const vp = document.getElementById("videoStage");
+      if (vp.requestFullscreen) vp.requestFullscreen();
+    }
+
+    function formatSec(sec) {
+      sec = Math.max(0, Math.floor(sec || 0));
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${s < 10 ? "0" : ""}${s}`;
+    }
+
+    // Mode, Ratio, Fit
+    function selectMode(m) {
+      state.mode = m;
+      ["AI Recap", "Pro AI Recap", "Subtitle"].forEach(item => {
+        const el = document.getElementById(`modeCard-${item}`);
+        if (item === m) {
+          el.className = "cursor-pointer border-2 border-blue-500 bg-blue-50/40 rounded-2xl p-2.5 relative";
+        } else {
+          el.className = "cursor-pointer border border-slate-200 rounded-2xl p-2.5 relative";
+        }
+      });
+      if (m === "AI Recap") selectOutLang("မြန်မာ");
+      updateSummary();
+    }
+
+    function selectRatio(r) {
+      state.ratio = r;
+      ["Original", "9:16", "1:1", "4:5", "16:9"].forEach(item => {
+        const btn = document.getElementById(`ratioBtn-${item}`);
+        btn.className = item === r ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-600";
+      });
+      updateSummary();
+    }
+
+    function selectOutLang(lang) {
+      if (state.mode === "AI Recap" && lang !== "မြန်မာ") return;
+      state.output_language = lang;
+      ["မြန်မာ", "English", "ไทย"].forEach(l => {
+        const btn = document.getElementById(`outLang-${l}`);
+        btn.className = l === lang ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-500";
+      });
+      renderVoiceList();
+      updateSummary();
+    }
+
+    function selectFit(fit) {
+      state.fit_mode = fit;
+      document.getElementById("fitBtn-crop").className = fit === "crop" ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-600";
+      document.getElementById("fitBtn-pad").className = fit === "pad" ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-600";
+    }
+
+    function toggleMirror(checked) {
+      state.mirror = checked;
+      document.getElementById("videoPlayer").style.transform = checked ? "scaleX(-1)" : "scaleX(1)";
+    }
+
+    function updateZoom(val) {
+      state.zoom = parseInt(val);
+      document.getElementById("zoomValText").innerText = `${val}%`;
+    }
+
+    // Voice Functions
+    function setGenderFilter(g) {
+      genderFilter = g;
+      ["All", "Male", "Female"].forEach(k => {
+        document.getElementById(`gFilter-${k}`).className = k === g ? "px-2.5 py-1 rounded-lg bg-white shadow-sm" : "px-2.5 py-1 rounded-lg text-slate-600";
+      });
+      renderVoiceList();
+    }
+
+    function renderVoiceList() {
+      const q = (document.getElementById("voiceSearchInput")?.value || "").toLowerCase();
+      const container = document.getElementById("voiceListContainer");
+      const filtered = VOICES.filter(v =>
+        (genderFilter === "All" || v.gender === genderFilter) &&
+        v.name.toLowerCase().includes(q)
+      );
+      container.innerHTML = filtered.map(v => `
+        <div onclick="chooseVoice('${v.name}', '${v.gender}', '${v.label}')"
+             class="flex items-center justify-between p-2.5 rounded-xl cursor-pointer ${state.voice_name === v.name ? 'bg-blue-50 border border-blue-200' : 'hover:bg-slate-50'}">
+          <div class="flex items-center gap-2.5">
+            <div class="w-4 h-4 rounded-full border-2 ${state.voice_name === v.name ? 'border-blue-600 bg-blue-600' : 'border-slate-300'}"></div>
+            <div>
+              <div class="text-xs font-bold text-slate-900">${v.name}</div>
+              <div class="text-[11px] text-slate-500">${v.gender}</div>
+            </div>
+          </div>
+          <button onclick="event.stopPropagation(); playVoiceSample('${v.name}')" class="text-blue-600 text-xs px-2 py-1">▶</button>
+        </div>
+      `).join("");
+    }
+
+    function chooseVoice(name, gender, label) {
+      state.voice_name = name;
+      document.getElementById("selectedVoiceAvatar").innerText = name[0];
+      document.getElementById("selectedVoiceTitle").innerText = name;
+      document.getElementById("selectedVoiceSub").innerText = `${gender} · ${label}`;
+      renderVoiceList();
+    }
+
+    function toggleVoiceDropdown() {
+      document.getElementById("voicePickerBox").classList.toggle("hidden");
+    }
+
+    async function playVoiceSample(vName) {
+      const fd = new FormData();
+      fd.append("voice_name", vName);
+      fd.append("speed", state.voice_speed);
+      fd.append("pitch", state.voice_pitch);
+      const res = await fetch("/api/voice-preview", { method: "POST", body: fd });
+      if (res.ok) {
+        const blob = await res.blob();
+        const audio = new Audio(URL.createObjectURL(blob));
+        audio.play();
+      }
+    }
+
+    function updateVoiceSpeed(val) {
+      state.voice_speed = parseInt(val);
+      document.getElementById("speedValText").innerText = `${val >= 0 ? '+' : ''}${val}%`;
+    }
+
+    function updateVoicePitch(val) {
+      state.voice_pitch = parseInt(val);
+      document.getElementById("pitchValText").innerText = `${val >= 0 ? '+' : ''}${val}Hz`;
+    }
+
+    // Captions & Blur Functions
+    function addBlurBox() {
+      state.blur_boxes += 1;
+      document.getElementById("blurCountTitle").innerText = `${state.blur_boxes} blur box(es)`;
+      const layer = document.getElementById("blurBoxesLayer");
+      const box = document.createElement("div");
+      box.className = "absolute left-[15%] bottom-[12%] w-[70%] h-[14%] backdrop-blur-md bg-white/20 border border-dashed border-amber-300 rounded-lg pointer-events-auto cursor-move";
+      layer.appendChild(box);
+      updateSummary();
+    }
+
+    function toggleFullBand(checked) {
+      state.full_band = checked;
+      document.getElementById("fullBandPreview").classList.toggle("hidden", !checked);
+    }
+
+    function toggleCaptionsOn(checked) {
+      state.captions_on = checked;
+      document.getElementById("captionBox").classList.toggle("hidden", !checked);
+      updateSummary();
+    }
+
+    function updateCaptionSize(val) {
+      state.text_size = parseInt(val);
+      document.getElementById("textSizeVal").innerText = `${val}px`;
+      document.getElementById("captionPreviewText").style.fontSize = `${Math.round(val * 0.65)}px`;
+    }
+
+    function setCaptionColor(hex) {
+      state.text_color = hex;
+      document.getElementById("captionPreviewText").style.color = hex;
+    }
+
+    function setOutlineColor(hex) {
+      state.outline_color = hex;
+      document.getElementById("captionPreviewText").style.setProperty("--outline-color", hex);
+    }
+
+    function toggleCaptionBgBox(checked) {
+      state.box_bg = checked;
+      document.getElementById("captionBox").style.backgroundColor = checked ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.15)";
+    }
+
+    function setCapPosPreset(posVal, label) {
+      updateVerticalPos(posVal);
+      document.getElementById("vertPosRange").value = posVal;
+      ["Bottom", "Middle", "Custom"].forEach(k => {
+        document.getElementById(`posBtn-${k}`).className = k === label ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-600";
+      });
+    }
+
+    function updateVerticalPos(val) {
+      state.vertical_position = parseInt(val);
+      document.getElementById("vertPosVal").innerText = `${val}%`;
+      document.getElementById("captionBox").style.top = `${Math.min(88, Math.max(8, val - 8))}%`;
+    }
+
+    function updateCaptionWidth(val) {
+      state.caption_width = parseInt(val);
+      document.getElementById("capWidthVal").innerText = `${val}%`;
+      document.getElementById("captionBox").style.width = `${val}%`;
+    }
+
+    // Draggable Caption Box on Video Stage
+    function initDraggableCaption() {
+      const box = document.getElementById("captionBox");
+      const stage = document.getElementById("videoStage");
+      let dragging = false;
+
+      box.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        box.setPointerCapture(e.pointerId);
+      });
+      box.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const rect = stage.getBoundingClientRect();
+        let relY = ((e.clientY - rect.top) / rect.height) * 100;
+        relY = Math.max(10, Math.min(92, Math.round(relY)));
+        document.getElementById("vertPosRange").value = relY;
+        updateVerticalPos(relY);
+      });
+      box.addEventListener("pointerup", () => { dragging = false; });
+    }
+
+    // Extras Functions
+    function toggleWatermark(checked) {
+      state.watermark_on = checked;
+      document.getElementById("watermarkControls").classList.toggle("hidden", !checked);
+      document.getElementById("watermarkPreview").classList.toggle("hidden", !checked);
+    }
+
+    function updateWatermarkText(val) {
+      state.watermark_text = val;
+      document.getElementById("watermarkPreview").innerText = val;
+    }
+
+    // Slider Helper
+    function adjustSlider(id, delta) {
+      const el = document.getElementById(id);
+      el.value = Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), parseFloat(el.value) + delta));
+      el.dispatchEvent(new Event("input"));
+    }
+
+    function updateSummary(durStr = "3:51") {
+      const ratioTxt = state.ratio === "Original" ? "Original ratio" : state.ratio;
+      const capTxt = state.captions_on ? "Captions on" : "Captions off";
+      document.getElementById("summaryTopLine").innerText = `Using your own API keys · ${durStr}`;
+      document.getElementById("summaryBottomLine").innerText = `${ratioTxt} · Blur ${state.blur_boxes} · ${capTxt} · ${state.output_language}`;
+    }
+
+    // Own Key Modal
+    function openKeyModal() {
+      document.getElementById("inputAssemblyKey").value = state.assemblyai_key;
+      document.getElementById("inputOpenRouterKey").value = state.openrouter_key;
+      document.getElementById("inputOpenRouterModel").value = state.openrouter_model;
+      document.getElementById("keyModal").classList.remove("hidden");
+    }
+    function closeKeyModal() {
+      document.getElementById("keyModal").classList.add("hidden");
+    }
+    function saveApiKeys() {
+      state.assemblyai_key = document.getElementById("inputAssemblyKey").value.trim();
+      state.openrouter_key = document.getElementById("inputOpenRouterKey").value.trim();
+      state.openrouter_model = document.getElementById("inputOpenRouterModel").value;
+      localStorage.setItem("aai_key", state.assemblyai_key);
+      localStorage.setItem("or_key", state.openrouter_key);
+      localStorage.setItem("or_model", state.openrouter_model);
+      closeKeyModal();
+    }
+
+    // Start Job & Poll 7-Step Progress
+    async function startRecapJob() {
+      if (!selectedVideoFile) {
+        alert("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင်အရင် ရွေးချယ်ပေးပါ (Video ပေါ်ရှိ + ခလုတ်ကိုနှိပ်ပါ)");
+        return;
+      }
+      if (!state.assemblyai_key || !state.openrouter_key) {
+        openKeyModal();
+        return;
+      }
+
+      document.getElementById("progressModal").classList.remove("hidden");
+      document.getElementById("completedActions").classList.add("hidden");
+      document.getElementById("topSpinner").classList.remove("hidden");
+
+      const fd = new FormData();
+      fd.append("video", selectedVideoFile);
+      fd.append("config", JSON.stringify(state));
+      const logoFile = document.getElementById("logoInput")?.files[0];
+      if (logoFile) fd.append("logo", logoFile);
+
+      const res = await fetch("/api/start-recap", { method: "POST", body: fd });
+      const data = await res.json();
+      pollJobStatus(data.job_id);
+    }
+
+    function renderStepChecklist(stepsMap) {
+      const container = document.getElementById("stepListContainer");
+      container.innerHTML = STEP_LABELS.map(s => {
+        const st = stepsMap[s.key] || "pending";
+        if (st === "done") {
+          return `
+            <div class="flex items-center gap-3 px-3 py-1.5 text-slate-800">
+              <span class="w-5 h-5 rounded-full bg-emerald-600 text-white text-xs flex items-center justify-center">✓</span>
+              <span>${s.label}</span>
+            </div>`;
+        } else if (st === "running") {
+          return `
+            <div class="flex items-center gap-3 px-3 py-2.5 bg-blue-50/90 rounded-xl text-slate-900 font-bold">
+              <span class="w-5 h-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin"></span>
+              <span>${s.label}</span>
+            </div>`;
+        } else {
+          return `
+            <div class="flex items-center gap-3 px-3 py-1.5 text-slate-400">
+              <span class="w-5 h-5 rounded-full border-2 border-slate-300"></span>
+              <span>${s.label}</span>
+            </div>`;
+        }
+      }).join("");
+    }
+
+    async function pollJobStatus(jobId) {
+      const timer = setInterval(async () => {
+        const res = await fetch(`/api/status/${jobId}`);
+        if (!res.ok) return;
+        const job = await res.json();
+
+        const curLabel = STEP_LABELS.find(x => x.key === job.current_step)?.label || "Processing";
+        document.getElementById("progStepTitle").innerText = curLabel;
+        document.getElementById("progSubMeta").innerText = `${job.filename} · ${job.mode} · ${state.ratio}`;
+        document.getElementById("progPercentText").innerText = `${job.progress}%`;
+        document.getElementById("progBarFill").style.width = `${job.progress}%`;
+        document.getElementById("progElapsed").innerText = `Elapsed ${formatSec(job.elapsed_sec)}`;
+        document.getElementById("progEta").innerText = `About ${formatSec(job.eta_sec)} left`;
+
+        renderStepChecklist(job.steps);
+
+        if (job.status === "completed") {
+          clearInterval(timer);
+          document.getElementById("topSpinner").classList.add("hidden");
+          document.getElementById("progStepTitle").innerText = "Completed!";
+          document.getElementById("completedActions").classList.remove("hidden");
+          document.getElementById("downloadVideoBtn").href = job.output_url;
+          if (job.tiktok_caption) {
+            const capBox = document.getElementById("aiCaptionResultBox");
+            capBox.innerText = job.tiktok_caption;
+            capBox.classList.remove("hidden");
+          }
+        } else if (job.status === "error") {
+          clearInterval(timer);
+          document.getElementById("topSpinner").classList.add("hidden");
+          alert("Error: " + job.error);
+        }
+      }, 2000);
+    }
+  </script>
+</body>
+</html>
