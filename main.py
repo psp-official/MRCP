@@ -23,7 +23,17 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Environment Variables မှ Default Keys (User က Own Key မထည့်ပါက fallback သုံးရန်)
 DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-3.8-flash")
+DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+
+# Free Model တစ်ခု Rate Limit (429) ဖြစ်နေပါက အလိုအလျောက် ပြောင်းသုံးမည့် 2026 Free Models စာရင်း
+FREE_MODEL_FALLBACKS = [
+    "google/gemma-4-31b-it:free",
+    "qwen/qwen3.8-27b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "openrouter/free",
+]
 
 # Job Status များ သိမ်းဆည်းရန် Memory Store
 JOBS: Dict[str, Dict[str, Any]] = {}
@@ -104,8 +114,8 @@ def update_job_step(job_id: str, step_name: str, progress: int):
 async def assemblyai_upload_and_transcribe(
     audio_path: Path, api_key: str, source_lang: str, job_id: str
 ) -> List[Dict[str, Any]]:
-    """အဆင့် ၂ (Upload) နှင့် အဆင့် ၃ (Transcribe) - AssemblyAI API"""
-    headers = {"authorization": api_key}
+    """အဆင့် ၂ (Upload) နှင့် အဆင့် ၃ (Transcribe) - AssemblyAI Free Tier (185 Hours Free)"""
+    headers = {"authorization": api_key.strip()}
     async with httpx.AsyncClient(timeout=300.0) as client:
         # Step 2: Upload Audio
         update_job_step(job_id, "upload", 15)
@@ -117,9 +127,12 @@ async def assemblyai_upload_and_transcribe(
             raise RuntimeError(f"AssemblyAI Upload Error: {up_res.text}")
         upload_url = up_res.json()["upload_url"]
 
-        # Step 3: Transcribe Audio
+        # Step 3: Transcribe Audio (Free Tier 185 Hours သုံးနိုင်ရန် universal-2 model ကို သုံးသည်)
         update_job_step(job_id, "transcribe", 25)
-        payload: Dict[str, Any] = {"audio_url": upload_url}
+        payload: Dict[str, Any] = {
+            "audio_url": upload_url,
+            "speech_model": "universal-2",  # 99+ languages & Free Tier 185 hrs supported
+        }
         if source_lang == "Auto-detect" or not source_lang:
             payload["language_detection"] = True
         else:
@@ -145,14 +158,17 @@ async def assemblyai_upload_and_transcribe(
                 raise RuntimeError(f"AssemblyAI Failed: {data.get('error')}")
             await asyncio.sleep(3)
 
-        # Sentences endpoint မှ တိကျသော Timestamps ရယူခြင်း
         sent_res = await client.get(
             f"https://api.assemblyai.com/v2/transcript/{transcript_id}/sentences",
             headers=headers,
         )
         sentences = sent_res.json().get("sentences", [])
         if not sentences and data.get("text"):
-            sentences = [{"text": data["text"], "start": 0, "end": int( (data.get("audio_duration") or 10) * 1000 )}]
+            sentences = [{
+                "text": data["text"],
+                "start": 0,
+                "end": int((data.get("audio_duration") or 10) * 1000)
+            }]
         return sentences
 
 
@@ -166,8 +182,10 @@ async def openrouter_generate_recap(
     default_hashtags: str,
     add_fyp: bool,
 ) -> Dict[str, Any]:
-    """အဆင့် ၄ (Translate / Recap Script ရေးသားခြင်း) - OpenRouter AI API"""
-    # စာကြောင်းများကို 15-25 စက္ကန့်စာ Scene Segment များအဖြစ် စုစည်းခြင်း
+    """
+    အဆင့် ၄ (Translate / Recap) - OpenRouter Free Tier (50 Requests/Day Free)
+    Video ၁ ပုဒ်လုံးကို Request ၁ ကြိမ်တည်းဖြင့် ပို့ပြီး 429 ဖြစ်ပါက အခြား Free Model သို့ အလိုအလျောက် ပြောင်းပေးသည်။
+    """
     segments = []
     cur_texts = []
     seg_start = 0.0
@@ -208,45 +226,64 @@ async def openrouter_generate_recap(
     else:
         style_rule = (
             f"မူရင်းဇာတ်ကောင်စကားပြော (Dialogue) များကို တိုက်ရိုက်မပြန်ဘဲ ဇာတ်လမ်းပြောပြသူ (3rd-Person Movie Recap Narrator) အသံဖြင့် "
-            f"{lang_instruction} အချိတ်အဆက်မိမိ ပြန်လည်ရေးသားပေးပါ။ အပိုင်းတစ်ခုချင်းစီ၏ ကြာချိန်နှင့် ကိုက်ညီသော စာကြောင်းအရှည် ဖြစ်ရပါမည်။"
+            f"{lang_instruction} အချိတ်အဆက်မိမိ ပြန်လည်ရေးသားပေးပါ။"
         )
 
     system_prompt = (
-        "You are an expert Movie Recap Scriptwriter. "
+        "You are an expert Movie Recap Scriptwriter.\n"
         f"{style_rule}\n"
-        "Return ONLY valid JSON with keys:\n"
+        "IMPORTANT: Respond ONLY with a valid JSON object (no markdown formatting, no extra text) in this exact structure:\n"
         '{"segments": [{"index": 0, "narration": "..."}], "tiktok_caption": "..."}\n'
         "Keep the exact same number of segments and matching index values."
     )
 
     user_content = json.dumps({"segments": segments}, ensure_ascii=False)
 
+    # ရွေးထားသော Model ကို ရှေ့ဆုံးမှထားပြီး မရပါက အခြား Free Model များကို အစဉ်လိုက် စမ်းသပ်မည်
+    preferred = model or DEFAULT_OPENROUTER_MODEL
+    candidate_models = [preferred] + [m for m in FREE_MODEL_FALLBACKS if m != preferred]
+
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://recap-app.onrender.com",
+        "X-Title": "AI Movie Recap Narrator",
     }
-    body = {
-        "model": model or DEFAULT_OPENROUTER_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "response_format": {"type": "json_object"},
-    }
+
+    raw_content = None
+    last_error = ""
 
     async with httpx.AsyncClient(timeout=240.0) as client:
-        res = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body
-        )
-        if res.status_code != 200:
-            raise RuntimeError(f"OpenRouter API Error: {res.text}")
-        raw_content = res.json()["choices"][0]["message"]["content"]
+        for try_model in candidate_models:
+            body = {
+                "model": try_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+            }
+            res = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body
+            )
+            if res.status_code == 200:
+                res_json = res.json()
+                if "choices" in res_json and res_json["choices"]:
+                    raw_content = res_json["choices"][0]["message"]["content"]
+                    if raw_content:
+                        break
+            # 429 (Rate limit) သို့မဟုတ် Provider busy ဖြစ်ပါက ၂ စက္ကန့်စောင့်ပြီး နောက် Free Model တစ်ခု ပြောင်းသုံးမည်
+            last_error = f"[{try_model}] {res.status_code}: {res.text}"
+            await asyncio.sleep(2)
 
-    # JSON Parsing
-    cleaned = re.sub(r"^```json|```$", "", raw_content.strip(), flags=re.MULTILINE).strip()
+    if not raw_content:
+        raise RuntimeError(f"OpenRouter Free Models အားလုံး ခေတ္တပြည့်နေပါသည်: {last_error}")
+
+    # Free Model များမှ ထွက်လာသော JSON ကို သန့်စင်ဖတ်ယူခြင်း
+    json_match = re.search(r"\{.*\}", raw_content, flags=re.DOTALL)
+    cleaned = json_match.group(0) if json_match else raw_content.strip()
     parsed = json.loads(cleaned)
-    narr_map = {item["index"]: item["narration"] for item in parsed.get("segments", [])}
 
+    narr_map = {int(item["index"]): item["narration"] for item in parsed.get("segments", [])}
     for seg in segments:
         seg["narration"] = narr_map.get(seg["index"], seg["text"])
 
