@@ -1,23 +1,26 @@
 FROM python:3.11-slim
 
-# FFmpeg၊ HarfBuzz နှင့် Google Noto Sans Myanmar + Padauk Font သွင်းခြင်း
+# FFmpeg၊ Fontconfig နှင့် မြန်မာ Unicode Fonts (Noto Sans Myanmar + SIL Padauk) သွင်းခြင်း
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fontconfig \
     fonts-noto-core \
-    fonts-padauk \
+    fonts-sil-padauk \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-COPY fonts/ /usr/share/fonts/truetype/custom/
-RUN fc-cache -f -v
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Repo ထဲတွင် fonts/ folder ပါလာပါက System Font အဖြစ် သွင်းပြီး မပါလာပါကလည်း Error မတက်အောင် ပြုလုပ်ခြင်း
+RUN mkdir -p /usr/share/fonts/truetype/custom && \
+    if [ -d "fonts" ]; then cp -rf fonts/* /usr/share/fonts/truetype/custom/ 2>/dev/null || true; fi && \
+    fc-cache -f -v
+
+# Render Paid Plan Persistent Disk လမ်းကြောင်း (/var/data)
 ENV DATA_DIR=/var/data/recap_jobs
 RUN mkdir -p /var/data/recap_jobs
 
