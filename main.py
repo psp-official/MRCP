@@ -420,14 +420,28 @@ CRITICAL RULES FOR BURMESE NARRATION:
             if not raw_content:
                 raise RuntimeError(f"OpenRouter Error: {last_error}")
 
-            json_match = re.search(r"\{.*\}", raw_content, flags=re.DOTALL)
-            cleaned = json_match.group(0) if json_match else raw_content.strip()
-            parsed = json.loads(cleaned)
+            # Robust JSON Cleaning to fix 'Invalid control character' error
+            cleaned_raw = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", raw_content)
+            json_match = re.search(r"\{.*\}", cleaned_raw, flags=re.DOTALL)
+            json_str = json_match.group(0) if json_match else cleaned_raw.strip()
+
+            try:
+                parsed = json.loads(json_str, strict=False)
+            except json.JSONDecodeError:
+                # Fallback: fix common quote/newline issues in AI output
+                import ast
+                try:
+                    # Try safe eval if python dict format
+                    cleaned_eval = json_str.replace("true", "True").replace("false", "False").replace("null", "None")
+                    parsed = ast.literal_eval(cleaned_eval)
+                except Exception:
+                    raise RuntimeError(f"AI က တရားဝင် JSON format မဟုတ်သော စာသားထုတ်ပေးပါသည်: {json_str[:200]}...")
 
             for item in parsed.get("segments", []):
                 narr_map[int(item["index"])] = clean_burmese_text(item.get("narration", ""))
             if parsed.get("tiktok_caption"):
                 tiktok_cap = clean_burmese_text(parsed["tiktok_caption"])
+
 
     for seg in segments:
         seg["narration"] = narr_map.get(seg["index"]) or clean_burmese_text(seg["text"])
