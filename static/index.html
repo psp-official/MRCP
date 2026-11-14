@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>AI Movie Recap Narrator (Groq + Gemini Edition)</title>
+  <title>DeepRecap - AI Movie Recap Narrator</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Padauk:wght@400;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
@@ -75,12 +75,9 @@
       box-shadow: 0 1px 4px rgba(0,0,0,0.2);
     }
     .caption-preview-text {
-      text-shadow:
-        -1.5px -1.5px 0 var(--outline-color, #000),
-         1.5px -1.5px 0 var(--outline-color, #000),
-        -1.5px  1.5px 0 var(--outline-color, #000),
-         1.5px  1.5px 0 var(--outline-color, #000),
-         0px    2px   4px rgba(0,0,0,0.65);
+      paint-order: stroke fill;
+      -webkit-text-stroke: var(--outline-w, 3px) var(--outline-color, #000000);
+      text-shadow: 0px 2px 4px rgba(0,0,0,0.5);
     }
   </style>
 </head>
@@ -91,14 +88,15 @@
     <!-- ================= 1. TOP HEADER ================= -->
     <header class="flex items-center justify-between px-4 py-3 bg-[#f5f8fc] sticky top-0 z-30">
       <div class="flex items-center gap-3 min-w-0">
-        <button class="text-slate-600 p-1 hover:bg-slate-200/70 rounded-lg">
+        <label for="videoInput" class="text-slate-600 p-1 hover:bg-slate-200/70 rounded-lg cursor-pointer" title="Select Video">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
           </svg>
-        </button>
-        <div class="truncate">
-          <div id="headerFilename" class="font-bold text-slate-900 text-base leading-tight truncate">1000083797.mp4</div>
-          <div id="headerMeta" class="text-xs text-slate-500">3:51 · 1280×720</div>
+        </label>
+        <input id="videoInput" type="file" accept="video/*" class="hidden" onchange="handleVideoSelect(event)" />
+        <div class="truncate cursor-pointer" onclick="document.getElementById('videoInput').click()">
+          <div id="headerFilename" class="font-bold text-slate-900 text-base leading-tight truncate">ဗီဒီယို ရွေးချယ်ရန် နှိပ်ပါ</div>
+          <div id="headerMeta" class="text-xs text-slate-500">0:00 · 1920×1080</div>
         </div>
       </div>
       <button onclick="openKeyModal()" class="px-4 py-1.5 bg-white border border-slate-200 rounded-full text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 active:scale-95 transition">
@@ -106,60 +104,87 @@
       </button>
     </header>
 
-    <!-- ================= 2. INTERACTIVE VIDEO PREVIEW ================= -->
+    <!-- ================= 2. INTERACTIVE VIDEO PREVIEW & 5 ACTION PILLS ================= -->
     <div class="px-3">
       <div id="videoStage" class="relative w-full aspect-video bg-stone-900 rounded-2xl overflow-hidden shadow-md">
         <video id="videoPlayer" class="w-full h-full object-contain" playsinline></video>
 
-        <div id="videoPlaceholder" class="absolute inset-0 bg-gradient-to-b from-amber-900/60 via-amber-800/45 to-stone-900 flex flex-col items-center justify-center text-white/80">
-          <span class="text-xs font-medium bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-xs">
-            ဗီဒီယိုဖိုင် ရွေးချယ်ရန် ဘယ်ဘက်အပေါ်က (+) ကိုနှိပ်ပါ
+        <div id="videoPlaceholder" onclick="document.getElementById('videoInput').click()" class="absolute inset-0 bg-stone-900 flex flex-col items-center justify-center text-white/80 cursor-pointer z-10">
+          <span class="text-xs font-medium bg-white/10 px-4 py-2 rounded-full backdrop-blur-xs border border-white/20">
+            + ဗီဒီယိုဖိုင် ရွေးချယ်ရန် နှိပ်ပါ
           </span>
         </div>
 
-        <div class="absolute top-3 inset-x-3 flex items-center justify-between z-20 pointer-events-none">
-          <label for="videoInput" class="pointer-events-auto w-10 h-10 rounded-full bg-black/50 backdrop-blur-xs text-white flex items-center justify-center cursor-pointer hover:bg-black/70 active:scale-95 transition">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m-7-7h14"/>
-            </svg>
-          </label>
-          <input id="videoInput" type="file" accept="video/*" class="hidden" onchange="handleVideoSelect(event)" />
-
-          <button onclick="toggleFreeCropHint()" class="pointer-events-auto w-10 h-10 rounded-full bg-black/50 backdrop-blur-xs text-white flex items-center justify-center hover:bg-black/70 active:scale-95 transition" title="Crop">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2"/>
-            </svg>
-          </button>
-
-          <button class="pointer-events-auto w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-md">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-            </svg>
-          </button>
-        </div>
-
+        <!-- Draggable Blur Boxes Layer -->
         <div id="blurBoxesLayer" class="absolute inset-0 pointer-events-none z-10"></div>
-        <div id="fullBandPreview" class="hidden absolute inset-x-0 bottom-[6%] h-[16%] bg-black/75 backdrop-blur-md z-10 pointer-events-none"></div>
+
+        <!-- Full Band Subtitle Blur Preview (Controlled by Band height, Band from bottom, Blur) -->
+        <div id="fullBandPreview" class="absolute inset-x-0 bg-white/10 border-t border-b border-dashed border-white/60 z-10 pointer-events-none"
+             style="bottom: 0%; height: 18%; backdrop-filter: blur(12px);"></div>
+
+        <!-- Live Watermark Text Preview -->
         <div id="watermarkPreview" class="hidden absolute right-4 bottom-8 text-white font-semibold pointer-events-none z-20" style="font-size: 14px; opacity: 0.65;">
           DeepRecap
         </div>
 
+        <!-- Draggable & Resizable Caption Preview Box -->
         <div id="captionBox" class="absolute left-1/2 -translate-x-1/2 w-[96%] border border-dashed border-white/90 rounded-full py-1.5 px-4 flex items-center justify-center cursor-move z-20 bg-black/15"
              style="top: 78%;">
           <span id="captionPreviewText" class="caption-preview-text font-bold text-center leading-tight select-none"
-                style="color: #ffff00; font-size: 19px; --outline-color: #000000;">
+                style="color: #ffff00; font-size: 20px; --outline-color: #000000; --outline-w: 3px;">
             ဒီနေရာမှာ စာတန်းထိုး ပေါ်မယ်
           </span>
           <div id="captionResizeDot" class="w-4 h-4 rounded-full bg-white border-2 border-blue-500 absolute right-1.5 top-1/2 -translate-y-1/2 shadow cursor-ew-resize"></div>
         </div>
       </div>
 
-      <div class="mt-2 bg-slate-500/90 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
+      <!-- 5 Circular Action Buttons Row (Delete, Blur, Edit, Crop, Done) from Video 0:04 -->
+      <div class="flex items-center justify-center gap-4 my-2.5">
+        <div class="flex flex-col items-center gap-1">
+          <button onclick="deleteSelectedBlur()" class="w-10 h-10 rounded-full bg-rose-200/80 text-rose-700 flex items-center justify-center hover:bg-rose-300 active:scale-95 transition">
+            ✕
+          </button>
+          <span class="text-[11px] font-medium text-slate-600">Delete</span>
+        </div>
+
+        <div class="flex flex-col items-center gap-1">
+          <button onclick="addBlurBox(); switchTab('captions');" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition text-lg">
+            +
+          </button>
+          <span class="text-[11px] font-medium text-slate-600">Blur</span>
+        </div>
+
+        <div class="flex flex-col items-center gap-1">
+          <button onclick="switchTab('captions')" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition text-sm">
+            ✎
+          </button>
+          <span class="text-[11px] font-medium text-slate-600">Edit</span>
+        </div>
+
+        <div class="flex flex-col items-center gap-1">
+          <button onclick="toggleFreeCropHint()" id="cropActionBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-sm active:scale-95 transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2"/>
+            </svg>
+          </button>
+          <span class="text-[11px] font-medium text-slate-600">Crop</span>
+        </div>
+
+        <div class="flex flex-col items-center gap-1">
+          <button onclick="finishOverlayEdit()" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition">
+            ✓
+          </button>
+          <span class="text-[11px] font-medium text-slate-600">Done</span>
+        </div>
+      </div>
+
+      <!-- Video Seekbar Control -->
+      <div class="bg-slate-600 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
         <button onclick="togglePlayVideo()" id="playPauseBtn" class="text-white focus:outline-none">
           <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </button>
         <input id="videoSeek" type="range" min="0" max="100" value="0" class="w-full" oninput="seekVideo(this.value)" />
-        <span id="videoTimeText" class="text-xs font-semibold whitespace-nowrap">0:00 / 3:51</span>
+        <span id="videoTimeText" class="text-xs font-semibold whitespace-nowrap">0:00 / 0:18</span>
         <button onclick="fullscreenVideo()" class="text-white/80 hover:text-white">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
@@ -191,7 +216,7 @@
                 <div class="w-2 h-2 rounded-full bg-blue-600"></div>
               </div>
               <div class="font-bold text-sm text-slate-900">AI Recap</div>
-              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Burmese voice + captions</div>
+              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Burmese voice</div>
             </div>
 
             <div onclick="selectMode('Pro AI Recap')" id="modeCard-Pro AI Recap" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
@@ -200,13 +225,13 @@
                 <span class="bg-slate-900 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">PRO</span>
               </div>
               <div class="font-bold text-sm text-slate-900">Pro AI Recap</div>
-              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Any language · better</div>
+              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Any language</div>
             </div>
 
             <div onclick="selectMode('Subtitle')" id="modeCard-Subtitle" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
               <div id="modeRadio-Subtitle" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center mb-2"></div>
               <div class="font-bold text-sm text-slate-900">Subtitle</div>
-              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Original audio + captions</div>
+              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Original + subs</div>
             </div>
           </div>
         </div>
@@ -271,7 +296,7 @@
         </div>
 
         <div class="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 border border-slate-100 leading-relaxed">
-          Drag on the video to crop — press the "Crop" pill above the picture.
+          Press "Crop" beside the video to choose the area to keep.
         </div>
 
         <div>
@@ -286,15 +311,20 @@
           </div>
         </div>
 
+        <!-- Source Language (All 10 Languages from Video 0:15) -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Source language</label>
           <select id="sourceLangSelect" onchange="state.source_language=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800">
             <option value="Auto-detect">Auto-detect</option>
-            <option value="zh">Chinese (Mandarin)</option>
+            <option value="zh">Chinese</option>
             <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="ru">Russian</option>
+            <option value="hi">Hindi</option>
+            <option value="th">Thai</option>
             <option value="ko">Korean</option>
             <option value="ja">Japanese</option>
-            <option value="th">Thai</option>
+            <option value="vi">Vietnamese</option>
           </select>
         </div>
       </div>
@@ -360,7 +390,7 @@
         </div>
       </div>
 
-      <!-- ==================== TAB 3: CAPTIONS ==================== -->
+      <!-- ==================== TAB 3: CAPTIONS (WITH FULL BAND SLIDERS FROM VIDEO 0:26) ==================== -->
       <div id="tab-captions" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <div>
@@ -370,14 +400,59 @@
           <button onclick="addBlurBox()" class="px-3.5 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl hover:bg-blue-100">+ Add</button>
         </div>
 
-        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-          <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
-          <label class="ios-switch">
-            <input type="checkbox" onchange="toggleFullBand(this.checked)" />
-            <span class="ios-slider"></span>
-          </label>
+        <!-- Full band (cover original subtitles) + 3 Sub-Sliders (Band height, Band from bottom, Blur) -->
+        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
+            <label class="ios-switch">
+              <input id="chkFullBand" type="checkbox" checked onchange="toggleFullBand(this.checked)" />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+
+          <div id="fullBandControls" class="space-y-3 pt-1">
+            <!-- Band height -->
+            <div>
+              <div class="flex justify-between text-xs font-bold mb-1">
+                <span>Band height</span>
+                <span id="bandHeightVal" class="text-blue-600">18%</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="adjustSlider('bandHeightRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                <input id="bandHeightRange" type="range" min="6" max="40" value="18" class="flex-1" oninput="updateFullBand()" />
+                <button onclick="adjustSlider('bandHeightRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+              </div>
+            </div>
+
+            <!-- Band from bottom -->
+            <div>
+              <div class="flex justify-between text-xs font-bold mb-1">
+                <span>Band from bottom</span>
+                <span id="bandBottomVal" class="text-blue-600">0%</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="adjustSlider('bandBottomRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                <input id="bandBottomRange" type="range" min="0" max="40" value="0" class="flex-1" oninput="updateFullBand()" />
+                <button onclick="adjustSlider('bandBottomRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+              </div>
+            </div>
+
+            <!-- Blur strength -->
+            <div>
+              <div class="flex justify-between text-xs font-bold mb-1">
+                <span>Blur</span>
+                <span id="bandBlurVal" class="text-blue-600">12</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="adjustSlider('bandBlurRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                <input id="bandBlurRange" type="range" min="2" max="30" value="12" class="flex-1" oninput="updateFullBand()" />
+                <button onclick="adjustSlider('bandBlurRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+              </div>
+            </div>
+          </div>
         </div>
 
+        <!-- Captions On/Off -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <div class="text-sm font-bold text-slate-800">Captions</div>
           <label class="ios-switch">
@@ -389,20 +464,20 @@
         <div>
           <label class="text-xs font-semibold text-slate-500">Font</label>
           <select onchange="state.font=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold">
-            <option value="Padauk">Padauk Bold (Recommended)</option>
-            <option value="Noto Sans Myanmar">Noto Sans Myanmar</option>
             <option value="A13 WenYoe">A13 WenYoe</option>
+            <option value="Padauk">Padauk Bold</option>
+            <option value="Noto Sans Myanmar">Noto Sans Myanmar</option>
           </select>
         </div>
 
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Text size</span>
-            <span id="textSizeVal" class="text-blue-600">30px</span>
+            <span id="textSizeVal" class="text-blue-600">32px</span>
           </div>
           <div class="flex items-center gap-3">
             <button onclick="adjustSlider('textSizeRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="textSizeRange" type="range" min="16" max="48" value="30" class="flex-1" oninput="updateCaptionSize(this.value)" />
+            <input id="textSizeRange" type="range" min="12" max="48" value="32" class="flex-1" oninput="updateCaptionSize(this.value)" />
             <button onclick="adjustSlider('textSizeRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
           </div>
         </div>
@@ -430,11 +505,11 @@
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Outline width</span>
-            <span id="outlineWVal" class="text-blue-600">3px</span>
+            <span id="outlineWVal" class="text-blue-600">4px</span>
           </div>
           <div class="flex items-center gap-3">
             <button onclick="adjustSlider('outlineWRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="outlineWRange" type="range" min="0" max="8" value="3" class="flex-1" oninput="state.outline_width=parseInt(this.value); document.getElementById('outlineWVal').innerText=this.value+'px'" />
+            <input id="outlineWRange" type="range" min="0" max="8" value="4" class="flex-1" oninput="updateOutlineWidth(this.value)" />
             <button onclick="adjustSlider('outlineWRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
           </div>
         </div>
@@ -459,7 +534,7 @@
           <label class="text-xs font-semibold text-slate-500">Position</label>
           <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
             <button onclick="setCapPosPreset(89, 'Bottom')" id="posBtn-Bottom" class="py-2 rounded-lg text-slate-600">Bottom</button>
-            <button onclick="setCapPosPreset(50, 'Middle')" id="posBtn-Middle" class="py-2 rounded-lg text-slate-600">Middle</button>
+            <button onclick="setCapPosPreset(55, 'Middle')" id="posBtn-Middle" class="py-2 rounded-lg text-slate-600">Middle</button>
             <button onclick="setCapPosPreset(state.vertical_position, 'Custom')" id="posBtn-Custom" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Custom</button>
           </div>
         </div>
@@ -577,7 +652,7 @@
               <div class="text-[11px] text-slate-500">TikTok caption · hashtags · thumbnail</div>
             </div>
             <label class="ios-switch">
-              <input type="checkbox" checked onchange="state.ai_hashtags=this.checked" />
+              <input type="checkbox" onchange="state.ai_hashtags=this.checked" />
               <span class="ios-slider"></span>
             </label>
           </div>
@@ -600,8 +675,8 @@
     <!-- ================= 5. STICKY BOTTOM SUMMARY & START BAR ================= -->
     <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-3 flex items-center justify-between z-30">
       <div class="min-w-0 pr-2">
-        <div id="summaryTopLine" class="text-xs font-bold text-slate-900 truncate">Using your own API keys · 3:51</div>
-        <div id="summaryBottomLine" class="text-[11px] text-slate-500 truncate">Original ratio · Blur 0 · Captions on · မြန်မာ</div>
+        <div id="summaryTopLine" class="text-xs font-bold text-slate-900 truncate">Using your own API keys · 0:18</div>
+        <div id="summaryBottomLine" class="text-[11px] text-slate-500 truncate">Original ratio · Blur 1 · Captions on · မြန်မာ</div>
       </div>
       <button onclick="startRecapJob()" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-sm rounded-full flex items-center gap-2 shadow-md transition">
         <span>▶</span>
@@ -611,7 +686,7 @@
 
   </div>
 
-  <!-- ================= 6. "OWN KEY" MODAL (GROQ WHISPER + GEMINI API) ================= -->
+  <!-- ================= 6. "OWN KEY" MODAL (GROQ WHISPER + GEMINI 3.8) ================= -->
   <div id="keyModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
     <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4">
       <div class="flex items-center justify-between">
@@ -639,7 +714,7 @@
           <label class="font-bold text-slate-700 block mb-1">Gemini Model (Nov 2026 Active)</label>
           <select id="inputGeminiModel" class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 font-semibold text-slate-800">
             <option value="gemini-3.8-flash">gemini-3.8-flash (အသစ်ဆုံး · မြန်မာစာ အကောင်းဆုံး)</option>
-            <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (2.5-flash အစားထိုး · အမြန်ဆုံး)</option>
+            <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (အမြန်ဆုံး · Free Quota အများဆုံး)</option>
             <option value="gemini-3.6-flash">gemini-3.6-flash (Stable Flash)</option>
             <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Legacy Lite)</option>
           </select>
@@ -660,8 +735,8 @@
         <div class="flex items-center gap-3 min-w-0">
           <div id="topSpinner" class="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
           <div class="min-w-0">
-            <div id="progStepTitle" class="font-extrabold text-lg text-slate-900 leading-tight">Render video</div>
-            <div id="progSubMeta" class="text-xs text-slate-500 truncate">1000083848.mp4 · AI Recap</div>
+            <div id="progStepTitle" class="font-extrabold text-lg text-slate-900 leading-tight">Extract audio</div>
+            <div id="progSubMeta" class="text-xs text-slate-500 truncate">video.mp4 · AI Recap</div>
           </div>
         </div>
         <div id="progPercentText" class="text-3xl font-extrabold text-blue-600">0%</div>
@@ -714,7 +789,7 @@
     ];
 
     let selectedVideoFile = null;
-    let currentVideoDurStr = "3:51";
+    let currentVideoDurStr = "0:18";
     let genderFilter = "All";
 
     const state = {
@@ -731,13 +806,16 @@
       voice_speed: 30,
       voice_pitch: 0,
       blur_boxes: 0,
-      full_band: false,
+      full_band: true,
+      band_height: 18,
+      band_from_bottom: 0,
+      band_blur: 12,
       captions_on: true,
-      font: "Padauk",
-      text_size: 30,
+      font: "A13 WenYoe",
+      text_size: 32,
       text_color: "#FFFF00",
       outline_color: "#000000",
-      outline_width: 3,
+      outline_width: 4,
       bold: true,
       box_bg: false,
       vertical_position: 89,
@@ -748,7 +826,7 @@
       watermark_size: 17,
       watermark_opacity: 65,
       watermark_move: false,
-      ai_hashtags: true,
+      ai_hashtags: false,
       default_hashtags: "#shortdramareview #myanmartiktok🇲🇲 #ဘာသာပြန်ဇာတ်လမ်းများ",
       add_fyp: true,
       groq_key: localStorage.getItem("groq_key") || "",
@@ -756,11 +834,11 @@
       gemini_model: localStorage.getItem("gemini_model") || "gemini-3.8-flash"
     };
 
-
     window.addEventListener("DOMContentLoaded", () => {
       renderVoiceList();
       initCaptionInteractions();
       toggleMirror(true);
+      updateFullBand();
       updateSummary();
     });
 
@@ -817,6 +895,20 @@
     function toggleFreeCropHint() {
       document.getElementById("videoStage").classList.toggle("ring-2");
       document.getElementById("videoStage").classList.toggle("ring-blue-500");
+    }
+
+    function finishOverlayEdit() {
+      document.getElementById("videoStage").classList.remove("ring-2", "ring-blue-500");
+    }
+
+    function deleteSelectedBlur() {
+      const layer = document.getElementById("blurBoxesLayer");
+      if (layer.lastChild) {
+        layer.removeChild(layer.lastChild);
+        state.blur_boxes = Math.max(0, state.blur_boxes - 1);
+        document.getElementById("blurCountTitle").innerText = `${state.blur_boxes} blur box(es)`;
+        updateSummary();
+      }
     }
 
     function formatSec(sec) {
@@ -951,12 +1043,13 @@
       document.getElementById("pitchValText").innerText = `${val >= 0 ? '+' : ''}${val}Hz`;
     }
 
+    // Full Band & Blur Box Controls (From Video 0:26 - 0:38)
     function addBlurBox() {
       state.blur_boxes += 1;
       document.getElementById("blurCountTitle").innerText = `${state.blur_boxes} blur box(es)`;
       const layer = document.getElementById("blurBoxesLayer");
       const box = document.createElement("div");
-      box.className = "absolute left-[15%] bottom-[12%] w-[70%] h-[14%] backdrop-blur-md bg-white/20 border border-dashed border-amber-300 rounded-lg pointer-events-auto cursor-move flex items-center justify-center text-[10px] text-white/80";
+      box.className = "absolute left-[15%] bottom-[12%] w-[70%] h-[14%] backdrop-blur-md bg-white/15 border border-dashed border-amber-300 rounded-lg pointer-events-auto cursor-move flex items-center justify-center text-[10px] text-white/80";
       box.innerText = "Blur Box";
       layer.appendChild(box);
       updateSummary();
@@ -965,6 +1058,27 @@
     function toggleFullBand(checked) {
       state.full_band = checked;
       document.getElementById("fullBandPreview").classList.toggle("hidden", !checked);
+      document.getElementById("fullBandControls").classList.toggle("hidden", !checked);
+      updateSummary();
+    }
+
+    function updateFullBand() {
+      const h = parseInt(document.getElementById("bandHeightRange").value);
+      const b = parseInt(document.getElementById("bandBottomRange").value);
+      const bl = parseInt(document.getElementById("bandBlurRange").value);
+
+      state.band_height = h;
+      state.band_from_bottom = b;
+      state.band_blur = bl;
+
+      document.getElementById("bandHeightVal").innerText = `${h}%`;
+      document.getElementById("bandBottomVal").innerText = `${b}%`;
+      document.getElementById("bandBlurVal").innerText = `${bl}`;
+
+      const bandEl = document.getElementById("fullBandPreview");
+      bandEl.style.height = `${h}%`;
+      bandEl.style.bottom = `${b}%`;
+      bandEl.style.backdropFilter = `blur(${bl}px)`;
     }
 
     function toggleCaptionsOn(checked) {
@@ -976,7 +1090,7 @@
     function updateCaptionSize(val) {
       state.text_size = parseInt(val);
       document.getElementById("textSizeVal").innerText = `${val}px`;
-      document.getElementById("captionPreviewText").style.fontSize = `${Math.round(val * 0.65)}px`;
+      document.getElementById("captionPreviewText").style.fontSize = `${Math.round(val * 0.62)}px`;
     }
 
     function setCaptionColor(hex, btnEl) {
@@ -991,6 +1105,12 @@
     function setOutlineColor(hex) {
       state.outline_color = hex;
       document.getElementById("captionPreviewText").style.setProperty("--outline-color", hex);
+    }
+
+    function updateOutlineWidth(val) {
+      state.outline_width = parseInt(val);
+      document.getElementById("outlineWVal").innerText = `${val}px`;
+      document.getElementById("captionPreviewText").style.setProperty("--outline-w", `${Math.round(val * 0.7)}px`);
     }
 
     function toggleCaptionBgBox(checked) {
@@ -1079,11 +1199,11 @@
     function updateSummary() {
       const ratioTxt = state.ratio === "Original" ? "Original ratio" : state.ratio;
       const capTxt = state.captions_on ? "Captions on" : "Captions off";
+      const totalBlurs = state.blur_boxes + (state.full_band ? 1 : 0);
       document.getElementById("summaryTopLine").innerText = `Using your own API keys · ${currentVideoDurStr}`;
-      document.getElementById("summaryBottomLine").innerText = `${ratioTxt} · Blur ${state.blur_boxes} · ${capTxt} · ${state.output_language}`;
+      document.getElementById("summaryBottomLine").innerText = `${ratioTxt} · Blur ${totalBlurs} · ${capTxt} · ${state.output_language}`;
     }
 
-    // Own Key Modal (Groq + Gemini)
     function openKeyModal() {
       document.getElementById("inputGroqKey").value = state.groq_key;
       document.getElementById("inputGeminiKey").value = state.gemini_key;
@@ -1107,7 +1227,7 @@
 
     async function startRecapJob() {
       if (!selectedVideoFile) {
-        alert("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင်အရင် ရွေးချယ်ပေးပါ (Video ပေါ်ရှိ + ခလုတ်ကိုနှိပ်ပါ)");
+        alert("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင်အရင် ရွေးချယ်ပေးပါ");
         return;
       }
       if (!state.groq_key || !state.gemini_key) {
