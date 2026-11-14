@@ -74,7 +74,6 @@
       border-radius: 999px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.2);
     }
-    /* Mobile-friendly text-shadow outline to prevent solid black text bug */
     .caption-preview-text {
       --ow: 2px;
       --oc: #000000;
@@ -114,564 +113,640 @@
       </button>
     </header>
 
-    <!-- ================= 2. INTERACTIVE VIDEO PREVIEW & 5 ACTION PILLS ================= -->
-    <div class="px-3">
-      <div id="videoStage" class="relative w-full aspect-video bg-stone-900 rounded-2xl overflow-hidden shadow-md">
-        <video id="videoPlayer" class="w-full h-full object-contain" playsinline></video>
+    <!-- ================= 2. EDITOR VIEW (HIDDEN WHEN WORKING) ================= -->
+    <div id="editorMainView" class="flex-1 flex flex-col">
+      <div class="px-3">
+        <div id="videoStage" class="relative w-full aspect-video bg-stone-900 rounded-2xl overflow-hidden shadow-md">
+          <video id="videoPlayer" class="w-full h-full object-contain transition-transform duration-150" playsinline></video>
 
-        <div id="videoPlaceholder" onclick="document.getElementById('videoInput').click()" class="absolute inset-0 bg-stone-900 flex flex-col items-center justify-center text-white/80 cursor-pointer z-10">
-          <span class="text-xs font-medium bg-white/10 px-4 py-2 rounded-full backdrop-blur-xs border border-white/20">
-            + ဗီဒီယိုဖိုင် ရွေးချယ်ရန် နှိပ်ပါ
-          </span>
+          <div id="videoPlaceholder" onclick="document.getElementById('videoInput').click()" class="absolute inset-0 bg-stone-900 flex flex-col items-center justify-center text-white/80 cursor-pointer z-10">
+            <span class="text-xs font-medium bg-white/10 px-4 py-2 rounded-full backdrop-blur-xs border border-white/20">
+              + ဗီဒီယိုဖိုင် ရွေးချယ်ရန် နှိပ်ပါ
+            </span>
+          </div>
+
+          <div id="blurBoxesLayer" class="absolute inset-0 pointer-events-none z-10"></div>
+          <div id="fullBandPreview" class="absolute inset-x-0 bg-white/10 border-t border-b border-dashed border-white/60 z-10 pointer-events-none"
+               style="bottom: 0%; height: 18%; backdrop-filter: blur(12px);"></div>
+          <div id="watermarkPreview" class="hidden absolute right-4 bottom-8 text-white font-semibold pointer-events-none z-20" style="font-size: 14px; opacity: 0.65;">
+            DeepRecap
+          </div>
+
+          <!-- Draggable & Resizable Caption Preview Box -->
+          <div id="captionBox" class="absolute left-1/2 -translate-x-1/2 w-[96%] border border-dashed border-white/90 rounded-full py-1.5 px-4 flex items-center justify-center cursor-move z-20 bg-black/15"
+               style="top: 79%;">
+            <span id="captionPreviewText" class="caption-preview-text font-bold text-center leading-tight select-none"
+                  style="color: #ffff00; font-size: 20px; --oc: #000000; --ow: 2px;">
+              ဒီနေရာမှာ စာတန်းထိုး ပေါ်မယ်
+            </span>
+            <div id="captionResizeDot" class="w-4 h-4 rounded-full bg-white border-2 border-blue-500 absolute right-1.5 top-1/2 -translate-y-1/2 shadow cursor-ew-resize"></div>
+          </div>
         </div>
 
-        <div id="blurBoxesLayer" class="absolute inset-0 pointer-events-none z-10"></div>
-        <div id="fullBandPreview" class="absolute inset-x-0 bg-white/10 border-t border-b border-dashed border-white/60 z-10 pointer-events-none"
-             style="bottom: 0%; height: 18%; backdrop-filter: blur(12px);"></div>
-        <div id="watermarkPreview" class="hidden absolute right-4 bottom-8 text-white font-semibold pointer-events-none z-20" style="font-size: 14px; opacity: 0.65;">
-          DeepRecap
+        <!-- 5 Circular Action Buttons Row -->
+        <div class="flex items-center justify-center gap-4 my-2.5">
+          <div class="flex flex-col items-center gap-1">
+            <button onclick="deleteSelectedBlur()" class="w-10 h-10 rounded-full bg-rose-200/80 text-rose-700 flex items-center justify-center hover:bg-rose-300 active:scale-95 transition">
+              ✕
+            </button>
+            <span class="text-[11px] font-medium text-slate-600">Delete</span>
+          </div>
+
+          <div class="flex flex-col items-center gap-1">
+            <button onclick="addBlurBox(); switchTab('captions');" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition text-lg">
+              +
+            </button>
+            <span class="text-[11px] font-medium text-slate-600">Blur</span>
+          </div>
+
+          <div class="flex flex-col items-center gap-1">
+            <button onclick="switchTab('captions')" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition text-sm">
+              ✎
+            </button>
+            <span class="text-[11px] font-medium text-slate-600">Edit</span>
+          </div>
+
+          <div class="flex flex-col items-center gap-1">
+            <button onclick="openCropModal()" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-sm active:scale-95 transition">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2"/>
+              </svg>
+            </button>
+            <span class="text-[11px] font-medium text-slate-600">Crop</span>
+          </div>
+
+          <div class="flex flex-col items-center gap-1">
+            <button onclick="finishOverlayEdit()" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition">
+              ✓
+            </button>
+            <span class="text-[11px] font-medium text-slate-600">Done</span>
+          </div>
         </div>
 
-        <div id="captionBox" class="absolute left-1/2 -translate-x-1/2 w-[96%] border border-dashed border-white/90 rounded-full py-1.5 px-4 flex items-center justify-center cursor-move z-20 bg-black/15"
-             style="top: 78%;">
-          <span id="captionPreviewText" class="caption-preview-text font-bold text-center leading-tight select-none"
-                style="color: #ffff00; font-size: 20px; --oc: #000000; --ow: 2px;">
-            ဒီနေရာမှာ စာတန်းထိုး ပေါ်မယ်
-          </span>
-          <div id="captionResizeDot" class="w-4 h-4 rounded-full bg-white border-2 border-blue-500 absolute right-1.5 top-1/2 -translate-y-1/2 shadow cursor-ew-resize"></div>
-        </div>
-      </div>
-
-      <!-- 5 Circular Action Buttons Row -->
-      <div class="flex items-center justify-center gap-4 my-2.5">
-        <div class="flex flex-col items-center gap-1">
-          <button onclick="deleteSelectedBlur()" class="w-10 h-10 rounded-full bg-rose-200/80 text-rose-700 flex items-center justify-center hover:bg-rose-300 active:scale-95 transition">
-            ✕
+        <div class="bg-slate-600 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
+          <button onclick="togglePlayVideo()" id="playPauseBtn" class="text-white focus:outline-none">
+            <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
           </button>
-          <span class="text-[11px] font-medium text-slate-600">Delete</span>
-        </div>
-
-        <div class="flex flex-col items-center gap-1">
-          <button onclick="addBlurBox(); switchTab('captions');" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition text-lg">
-            +
-          </button>
-          <span class="text-[11px] font-medium text-slate-600">Blur</span>
-        </div>
-
-        <div class="flex flex-col items-center gap-1">
-          <button onclick="switchTab('captions')" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition text-sm">
-            ✎
-          </button>
-          <span class="text-[11px] font-medium text-slate-600">Edit</span>
-        </div>
-
-        <div class="flex flex-col items-center gap-1">
-          <button onclick="toggleFreeCropHint()" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-sm active:scale-95 transition">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2"/>
+          <input id="videoSeek" type="range" min="0" max="100" value="0" class="w-full" oninput="seekVideo(this.value)" />
+          <span id="videoTimeText" class="text-xs font-semibold whitespace-nowrap">0:00 / 0:18</span>
+          <button onclick="fullscreenVideo()" class="text-white/80 hover:text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
             </svg>
           </button>
-          <span class="text-[11px] font-medium text-slate-600">Crop</span>
-        </div>
-
-        <div class="flex flex-col items-center gap-1">
-          <button onclick="finishOverlayEdit()" class="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition">
-            ✓
-          </button>
-          <span class="text-[11px] font-medium text-slate-600">Done</span>
         </div>
       </div>
 
-      <div class="bg-slate-600 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
-        <button onclick="togglePlayVideo()" id="playPauseBtn" class="text-white focus:outline-none">
-          <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-        </button>
-        <input id="videoSeek" type="range" min="0" max="100" value="0" class="w-full" oninput="seekVideo(this.value)" />
-        <span id="videoTimeText" class="text-xs font-semibold whitespace-nowrap">0:00 / 0:18</span>
-        <button onclick="fullscreenVideo()" class="text-white/80 hover:text-white">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
-          </svg>
-        </button>
-      </div>
-    </div>
-
-    <!-- ================= 3. FOUR TABS NAVIGATION ================= -->
-    <div class="px-3 mt-3">
-      <div class="bg-slate-200/80 p-1 rounded-2xl grid grid-cols-4 gap-1 text-sm font-semibold">
-        <button onclick="switchTab('video')" id="tabBtn-video" class="py-2 rounded-xl bg-white text-slate-900 shadow-sm transition">Video</button>
-        <button onclick="switchTab('voice')" id="tabBtn-voice" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Voice</button>
-        <button onclick="switchTab('captions')" id="tabBtn-captions" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Captions</button>
-        <button onclick="switchTab('extras')" id="tabBtn-extras" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Extras</button>
-      </div>
-    </div>
-
-    <!-- ================= 4. TAB CONTENT PANELS ================= -->
-    <div class="px-3 mt-3 flex-1">
-
-      <!-- ==================== TAB 1: VIDEO ==================== -->
-      <div id="tab-video" class="space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Mode</label>
-          <div class="grid grid-cols-3 gap-2 mt-1.5">
-            <div onclick="selectMode('AI Recap')" id="modeCard-AI Recap" class="cursor-pointer border-2 border-blue-500 bg-blue-50/30 rounded-2xl p-2.5">
-              <div id="modeRadio-AI Recap" class="w-4 h-4 rounded-full border-2 border-blue-600 flex items-center justify-center mb-2">
-                <div class="w-2 h-2 rounded-full bg-blue-600"></div>
-              </div>
-              <div class="font-bold text-sm text-slate-900">AI Recap</div>
-              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Burmese voice</div>
-            </div>
-
-            <div onclick="selectMode('Pro AI Recap')" id="modeCard-Pro AI Recap" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
-              <div class="flex items-center justify-between mb-2">
-                <div id="modeRadio-Pro AI Recap" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center"></div>
-                <span class="bg-slate-900 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">PRO</span>
-              </div>
-              <div class="font-bold text-sm text-slate-900">Pro AI Recap</div>
-              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Any language</div>
-            </div>
-
-            <div onclick="selectMode('Subtitle')" id="modeCard-Subtitle" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
-              <div id="modeRadio-Subtitle" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center mb-2"></div>
-              <div class="font-bold text-sm text-slate-900">Subtitle</div>
-              <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Original + subs</div>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Ratio</label>
-          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-5 gap-1 mt-1 text-xs font-semibold">
-            <button onclick="selectRatio('Original')" id="ratioBtn-Original" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Original</button>
-            <button onclick="selectRatio('9:16')" id="ratioBtn-9:16" class="py-2 rounded-lg text-slate-600">9:16</button>
-            <button onclick="selectRatio('1:1')" id="ratioBtn-1:1" class="py-2 rounded-lg text-slate-600">1:1</button>
-            <button onclick="selectRatio('4:5')" id="ratioBtn-4:5" class="py-2 rounded-lg text-slate-600">4:5</button>
-            <button onclick="selectRatio('16:9')" id="ratioBtn-16:9" class="py-2 rounded-lg text-slate-600">16:9</button>
-          </div>
-        </div>
-
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Output language</label>
-          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
-            <button onclick="selectOutLang('မြန်မာ')" id="outLang-မြန်မာ" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">မြန်မာ</button>
-            <button onclick="selectOutLang('English')" id="outLang-English" class="py-2 rounded-lg text-slate-400">English</button>
-            <button onclick="selectOutLang('ไทย')" id="outLang-ไทย" class="py-2 rounded-lg text-slate-400">ไทย</button>
-          </div>
-          <p class="text-[11px] text-slate-500 mt-1.5">AI Recap makes Burmese only — choose Pro AI Recap for English or Thai.</p>
-        </div>
-
-        <div>
-          <label class="text-xs font-semibold text-slate-500">How the video fits</label>
-          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-2 gap-1 mt-1 text-xs font-semibold">
-            <button onclick="selectFit('crop')" id="fitBtn-crop" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Crop (fill)</button>
-            <button onclick="selectFit('pad')" id="fitBtn-pad" class="py-2 rounded-lg text-slate-600">Pad (blur bg)</button>
-          </div>
-          <p class="text-[11px] text-slate-500 mt-1">Drag on the video to choose the area (free crop)</p>
-        </div>
-
-        <div class="space-y-2 pt-1">
-          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <div>
-              <div class="text-sm font-bold text-slate-800">TikTok HD (1080p)</div>
-              <div class="text-[11px] text-slate-500">Sharper · slower render · bigger file</div>
-            </div>
-            <label class="ios-switch">
-              <input type="checkbox" onchange="state.tiktok_hd=this.checked" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
-
-          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <div class="text-sm font-bold text-slate-800">Mirror (flip left/right)</div>
-            <label class="ios-switch">
-              <input type="checkbox" checked onchange="toggleMirror(this.checked)" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
-
-          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <div class="text-sm font-bold text-slate-800">Random 4px crop</div>
-            <label class="ios-switch">
-              <input type="checkbox" onchange="state.random_4px_crop=this.checked" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 border border-slate-100 leading-relaxed">
-          Press "Crop" beside the video to choose the area to keep.
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Zoom</span>
-            <span id="zoomValText" class="text-blue-600">100%</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('zoomRange', -5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
-            <input id="zoomRange" type="range" min="100" max="150" value="100" class="flex-1" oninput="updateZoom(this.value)" />
-            <button onclick="adjustSlider('zoomRange', 5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
-          </div>
-        </div>
-
-        <!-- Source Language (All 10 Languages from Video 0:15) -->
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Source language</label>
-          <select id="sourceLangSelect" onchange="state.source_language=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800">
-            <option value="Auto-detect">Auto-detect</option>
-            <option value="zh">Chinese</option>
-            <option value="en">English</option>
-            <option value="es">Spanish</option>
-            <option value="ru">Russian</option>
-            <option value="hi">Hindi</option>
-            <option value="th">Thai</option>
-            <option value="ko">Korean</option>
-            <option value="ja">Japanese</option>
-            <option value="vi">Vietnamese</option>
-          </select>
+      <!-- FOUR TABS NAVIGATION -->
+      <div class="px-3 mt-3">
+        <div class="bg-slate-200/80 p-1 rounded-2xl grid grid-cols-4 gap-1 text-sm font-semibold">
+          <button onclick="switchTab('video')" id="tabBtn-video" class="py-2 rounded-xl bg-white text-slate-900 shadow-sm transition">Video</button>
+          <button onclick="switchTab('voice')" id="tabBtn-voice" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Voice</button>
+          <button onclick="switchTab('captions')" id="tabBtn-captions" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Captions</button>
+          <button onclick="switchTab('extras')" id="tabBtn-extras" class="py-2 rounded-xl text-slate-600 hover:text-slate-900 transition">Extras</button>
         </div>
       </div>
 
-      <!-- ==================== TAB 2: VOICE ==================== -->
-      <div id="tab-voice" class="hidden space-y-4 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
-          <span>Voice</span>
-          <span id="voiceCountLabel">2 မြန်မာ voices</span>
-        </div>
+      <!-- TAB CONTENT PANELS -->
+      <div class="px-3 mt-3 flex-1">
 
-        <div class="border border-blue-200 bg-blue-50/20 rounded-2xl p-3 flex items-center justify-between">
-          <div onclick="toggleVoiceDropdown()" class="flex items-center gap-3 cursor-pointer flex-1">
-            <div id="selectedVoiceAvatar" class="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-sm">T</div>
-            <div>
-              <div id="selectedVoiceTitle" class="font-bold text-sm text-slate-900">Thiha</div>
-              <div id="selectedVoiceSub" class="text-xs text-slate-500">Male · Myanmar (Burma)</div>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <button onclick="toggleVoiceDropdown()" id="voiceChevronBtn" class="p-1 text-slate-500 font-bold">⌃</button>
-            <button onclick="playVoiceSample(state.voice_name)" class="w-9 h-9 rounded-full bg-blue-50 text-blue-700 flex items-center justify-center hover:bg-blue-100 active:scale-95 transition">
-              ▶
-            </button>
-          </div>
-        </div>
-
-        <div id="voicePickerBox" class="border border-slate-200 rounded-2xl p-3 space-y-3">
-          <div class="flex gap-2">
-            <input id="voiceSearchInput" type="text" placeholder="Search voices..." oninput="renderVoiceList()" class="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-slate-50" />
-            <div class="bg-slate-100 p-1 rounded-xl flex text-xs font-semibold">
-              <button onclick="setGenderFilter('All')" id="gFilter-All" class="px-2.5 py-1 rounded-lg bg-white shadow-sm">All</button>
-              <button onclick="setGenderFilter('Male')" id="gFilter-Male" class="px-2.5 py-1 rounded-lg text-slate-600">Male</button>
-              <button onclick="setGenderFilter('Female')" id="gFilter-Female" class="px-2.5 py-1 rounded-lg text-slate-600">Female</button>
-            </div>
-          </div>
-          <div id="voiceGroupHeader" class="text-xs font-semibold text-slate-500">Myanmar (Burma) · 2</div>
-          <div id="voiceListContainer" class="space-y-1.5"></div>
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Speed</span>
-            <span id="speedValText" class="text-blue-600">+30%</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('speedRange', -5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
-            <input id="speedRange" type="range" min="-20" max="60" value="30" class="flex-1" oninput="updateVoiceSpeed(this.value)" />
-            <button onclick="adjustSlider('speedRange', 5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
-          </div>
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Pitch</span>
-            <span id="pitchValText" class="text-blue-600">+0Hz</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('pitchRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
-            <input id="pitchRange" type="range" min="-20" max="20" value="0" class="flex-1" oninput="updateVoicePitch(this.value)" />
-            <button onclick="adjustSlider('pitchRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ==================== TAB 3: CAPTIONS (WITH FULL BAND SLIDERS FROM VIDEO 0:26) ==================== -->
-      <div id="tab-captions" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+        <!-- ==================== TAB 1: VIDEO ==================== -->
+        <div id="tab-video" class="space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
           <div>
-            <div id="blurCountTitle" class="text-sm font-bold text-slate-800">0 blur box(es)</div>
-            <div class="text-[11px] text-slate-500">Draw on the video, drag to move</div>
-          </div>
-          <button onclick="addBlurBox()" class="px-3.5 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl hover:bg-blue-100">+ Add</button>
-        </div>
-
-        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
-          <div class="flex items-center justify-between">
-            <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
-            <label class="ios-switch">
-              <input id="chkFullBand" type="checkbox" checked onchange="toggleFullBand(this.checked)" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
-
-          <div id="fullBandControls" class="space-y-3 pt-1">
-            <div>
-              <div class="flex justify-between text-xs font-bold mb-1">
-                <span>Band height</span>
-                <span id="bandHeightVal" class="text-blue-600">18%</span>
+            <label class="text-xs font-semibold text-slate-500">Mode</label>
+            <div class="grid grid-cols-3 gap-2 mt-1.5">
+              <div onclick="selectMode('AI Recap')" id="modeCard-AI Recap" class="cursor-pointer border-2 border-blue-500 bg-blue-50/30 rounded-2xl p-2.5">
+                <div id="modeRadio-AI Recap" class="w-4 h-4 rounded-full border-2 border-blue-600 flex items-center justify-center mb-2">
+                  <div class="w-2 h-2 rounded-full bg-blue-600"></div>
+                </div>
+                <div class="font-bold text-sm text-slate-900">AI Recap</div>
+                <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Burmese voice</div>
               </div>
-              <div class="flex items-center gap-2">
-                <button onclick="adjustSlider('bandHeightRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
-                <input id="bandHeightRange" type="range" min="6" max="40" value="18" class="flex-1" oninput="updateFullBand()" />
-                <button onclick="adjustSlider('bandHeightRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+
+              <div onclick="selectMode('Pro AI Recap')" id="modeCard-Pro AI Recap" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
+                <div class="flex items-center justify-between mb-2">
+                  <div id="modeRadio-Pro AI Recap" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center"></div>
+                  <span class="bg-slate-900 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">PRO</span>
+                </div>
+                <div class="font-bold text-sm text-slate-900">Pro AI Recap</div>
+                <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Server Cloud · Any app</div>
+              </div>
+
+              <div onclick="selectMode('Subtitle')" id="modeCard-Subtitle" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
+                <div id="modeRadio-Subtitle" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center mb-2"></div>
+                <div class="font-bold text-sm text-slate-900">Subtitle</div>
+                <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Original + subs</div>
               </div>
             </div>
 
-            <div>
-              <div class="flex justify-between text-xs font-bold mb-1">
-                <span>Band from bottom</span>
-                <span id="bandBottomVal" class="text-blue-600">0%</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <button onclick="adjustSlider('bandBottomRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
-                <input id="bandBottomRange" type="range" min="0" max="40" value="0" class="flex-1" oninput="updateFullBand()" />
-                <button onclick="adjustSlider('bandBottomRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
-              </div>
-            </div>
-
-            <div>
-              <div class="flex justify-between text-xs font-bold mb-1">
-                <span>Blur</span>
-                <span id="bandBlurVal" class="text-blue-600">12</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <button onclick="adjustSlider('bandBlurRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
-                <input id="bandBlurRange" type="range" min="2" max="30" value="12" class="flex-1" oninput="updateFullBand()" />
-                <button onclick="adjustSlider('bandBlurRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
-              </div>
+            <!-- Pro AI Recap Server Background Info Banner -->
+            <div id="proServerBadge" class="hidden mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-[11px] text-blue-900 font-medium leading-relaxed">
+              ☁️ <b>Pro Server Cloud Mode:</b> ဗီဒီယိုကို Server ပေါ်တွင် ထုတ်ပေးမည်ဖြစ်၍ Render လုပ်နေစဉ် TikTok သို့မဟုတ် အခြား App များကို စိတ်ကြိုက် သွားရောက်ကြည့်ရှုနိုင်ပါသည်။ ပြီးဆုံးသည်နှင့် အလိုအလျောက် Download ဆွဲပေးပါမည်။
             </div>
           </div>
-        </div>
 
-        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-          <div class="text-sm font-bold text-slate-800">Captions</div>
-          <label class="ios-switch">
-            <input type="checkbox" checked onchange="toggleCaptionsOn(this.checked)" />
-            <span class="ios-slider"></span>
-          </label>
-        </div>
-
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Font</label>
-          <select onchange="state.font=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold">
-            <option value="A13 WenYoe">A13 WenYoe</option>
-            <option value="Padauk">Padauk Bold</option>
-            <option value="Noto Sans Myanmar">Noto Sans Myanmar</option>
-          </select>
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Text size</span>
-            <span id="textSizeVal" class="text-blue-600">32px</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('textSizeRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="textSizeRange" type="range" min="12" max="48" value="32" class="flex-1" oninput="updateCaptionSize(this.value)" />
-            <button onclick="adjustSlider('textSizeRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
-          </div>
-        </div>
-
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Text colour</label>
-          <div class="flex items-center gap-3 mt-2">
-            <button onclick="setCaptionColor('#FFFFFF', this)" class="color-swatch w-8 h-8 rounded-full bg-white border border-slate-300"></button>
-            <button onclick="setCaptionColor('#FFFF00', this)" class="color-swatch w-8 h-8 rounded-full bg-[#FFFF00] ring-2 ring-offset-2 ring-blue-700"></button>
-            <button onclick="setCaptionColor('#7DD3FC', this)" class="color-swatch w-8 h-8 rounded-full bg-[#7DD3FC]"></button>
-            <button onclick="setCaptionColor('#F472B6', this)" class="color-swatch w-8 h-8 rounded-full bg-[#F472B6]"></button>
-            <button onclick="setCaptionColor('#86EFAC', this)" class="color-swatch w-8 h-8 rounded-full bg-[#86EFAC]"></button>
-            <button onclick="setCaptionColor('#FB923C', this)" class="color-swatch w-8 h-8 rounded-full bg-[#FB923C]"></button>
-            <label class="w-8 h-8 rounded-full cursor-pointer flex items-center justify-center bg-gradient-to-tr from-pink-500 via-yellow-400 to-cyan-400">
-              <input type="color" value="#ffff00" onchange="setCaptionColor(this.value, null)" class="opacity-0 w-0 h-0" />
-            </label>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-          <span class="text-sm font-bold text-slate-800">Outline colour</span>
-          <input type="color" value="#000000" onchange="setOutlineColor(this.value)" class="w-10 h-7 rounded cursor-pointer border border-slate-300 bg-black" />
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Outline width</span>
-            <span id="outlineWVal" class="text-blue-600">4px</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('outlineWRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="outlineWRange" type="range" min="0" max="8" value="4" class="flex-1" oninput="updateOutlineWidth(this.value)" />
-            <button onclick="adjustSlider('outlineWRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-          <span class="text-sm font-bold text-slate-800">Bold</span>
-          <label class="ios-switch">
-            <input type="checkbox" checked onchange="state.bold=this.checked" />
-            <span class="ios-slider"></span>
-          </label>
-        </div>
-
-        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-          <span class="text-sm font-bold text-slate-800">Box (background)</span>
-          <label class="ios-switch">
-            <input type="checkbox" onchange="toggleCaptionBgBox(this.checked)" />
-            <span class="ios-slider"></span>
-          </label>
-        </div>
-
-        <div>
-          <label class="text-xs font-semibold text-slate-500">Position</label>
-          <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
-            <button onclick="setCapPosPreset(89, 'Bottom')" id="posBtn-Bottom" class="py-2 rounded-lg text-slate-600">Bottom</button>
-            <button onclick="setCapPosPreset(55, 'Middle')" id="posBtn-Middle" class="py-2 rounded-lg text-slate-600">Middle</button>
-            <button onclick="setCapPosPreset(state.vertical_position, 'Custom')" id="posBtn-Custom" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Custom</button>
-          </div>
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Vertical position</span>
-            <span id="vertPosVal" class="text-blue-600">89%</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('vertPosRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="vertPosRange" type="range" min="10" max="95" value="89" class="flex-1" oninput="updateVerticalPos(this.value)" />
-            <button onclick="adjustSlider('vertPosRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
-          </div>
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Words per caption</span>
-            <span id="wordsCapVal" class="text-blue-600">9</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('wordsCapRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="wordsCapRange" type="range" min="3" max="16" value="9" class="flex-1" oninput="state.words_per_caption=parseInt(this.value); document.getElementById('wordsCapVal').innerText=this.value" />
-            <button onclick="adjustSlider('wordsCapRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
-          </div>
-          <p class="text-[11px] text-amber-700 font-medium mt-1">Cannot be changed after the video is made — set it now</p>
-        </div>
-
-        <div>
-          <div class="flex justify-between text-sm font-bold mb-1.5">
-            <span>Caption width</span>
-            <span id="capWidthVal" class="text-blue-600">96%</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <button onclick="adjustSlider('capWidthRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
-            <input id="capWidthRange" type="range" min="50" max="100" value="96" class="flex-1" oninput="updateCaptionWidth(this.value)" />
-            <button onclick="adjustSlider('capWidthRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ==================== TAB 4: EXTRAS ==================== -->
-      <div id="tab-extras" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-sm font-bold text-slate-800">Watermark text</span>
-            <label class="ios-switch">
-              <input type="checkbox" id="chkWatermark" onchange="toggleWatermark(this.checked)" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
-
-          <div id="watermarkControls" class="hidden space-y-3 pt-1">
-            <div>
-              <input type="text" id="watermarkInput" value="DeepRecap" oninput="updateWatermarkText(this.value)"
-                     class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold" />
-              <p class="text-[11px] text-slate-500 mt-1">English only (A–Z, numbers, symbols)</p>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Ratio</label>
+            <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-5 gap-1 mt-1 text-xs font-semibold">
+              <button onclick="selectRatio('Original')" id="ratioBtn-Original" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Original</button>
+              <button onclick="selectRatio('9:16')" id="ratioBtn-9:16" class="py-2 rounded-lg text-slate-600">9:16</button>
+              <button onclick="selectRatio('1:1')" id="ratioBtn-1:1" class="py-2 rounded-lg text-slate-600">1:1</button>
+              <button onclick="selectRatio('4:5')" id="ratioBtn-4:5" class="py-2 rounded-lg text-slate-600">4:5</button>
+              <button onclick="selectRatio('16:9')" id="ratioBtn-16:9" class="py-2 rounded-lg text-slate-600">16:9</button>
             </div>
+          </div>
 
-            <div>
-              <div class="flex justify-between text-xs font-bold mb-1">
-                <span>Text size</span>
-                <span id="wmSizeVal" class="text-blue-600">17px</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <button onclick="adjustSlider('wmSizeRange', -1)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
-                <input id="wmSizeRange" type="range" min="10" max="36" value="17" class="flex-1" oninput="state.watermark_size=parseInt(this.value); document.getElementById('wmSizeVal').innerText=this.value+'px'" />
-                <button onclick="adjustSlider('wmSizeRange', 1)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
-              </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Output language</label>
+            <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
+              <button onclick="selectOutLang('မြန်မာ')" id="outLang-မြန်မာ" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">မြန်မာ</button>
+              <button onclick="selectOutLang('English')" id="outLang-English" class="py-2 rounded-lg text-slate-400">English</button>
+              <button onclick="selectOutLang('ไทย')" id="outLang-ไทย" class="py-2 rounded-lg text-slate-400">ไทย</button>
             </div>
+            <p class="text-[11px] text-slate-500 mt-1.5">AI Recap makes Burmese only — choose Pro AI Recap for English or Thai.</p>
+          </div>
 
-            <div>
-              <div class="flex justify-between text-xs font-bold mb-1">
-                <span>Opacity</span>
-                <span id="wmOpVal" class="text-blue-600">65%</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <button onclick="adjustSlider('wmOpRange', -5)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
-                <input id="wmOpRange" type="range" min="10" max="100" value="65" class="flex-1" oninput="state.watermark_opacity=parseInt(this.value); document.getElementById('wmOpVal').innerText=this.value+'%'; document.getElementById('watermarkPreview').style.opacity=this.value/100" />
-                <button onclick="adjustSlider('wmOpRange', 5)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
-              </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">How the video fits</label>
+            <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-2 gap-1 mt-1 text-xs font-semibold">
+              <button onclick="selectFit('crop')" id="fitBtn-crop" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Crop (fill)</button>
+              <button onclick="selectFit('pad')" id="fitBtn-pad" class="py-2 rounded-lg text-slate-600">Pad (blur bg)</button>
             </div>
+            <p class="text-[11px] text-slate-500 mt-1">Drag on the video to choose the area (free crop)</p>
+          </div>
 
-            <div class="flex items-center justify-between pt-1">
-              <span class="text-xs font-bold text-slate-700">Move around the screen</span>
+          <div class="space-y-2 pt-1">
+            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+              <div>
+                <div class="text-sm font-bold text-slate-800">TikTok HD (1080p)</div>
+                <div class="text-[11px] text-slate-500">Sharper · slower render · bigger file</div>
+              </div>
               <label class="ios-switch">
-                <input type="checkbox" onchange="state.watermark_move=this.checked" />
+                <input type="checkbox" onchange="state.tiktok_hd=this.checked" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+
+            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+              <div class="text-sm font-bold text-slate-800">Mirror (flip left/right)</div>
+              <label class="ios-switch">
+                <input type="checkbox" checked onchange="toggleMirror(this.checked)" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+
+            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+              <div class="text-sm font-bold text-slate-800">Random 4px crop</div>
+              <label class="ios-switch">
+                <input type="checkbox" onchange="state.random_4px_crop=this.checked" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div onclick="openCropModal()" class="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 border border-slate-100 leading-relaxed cursor-pointer hover:bg-slate-100">
+            Press "Crop" beside the video to choose the area to keep.
+          </div>
+
+          <!-- Zoom Slider (Live Preview + Server Render Sync) -->
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Zoom</span>
+              <span id="zoomValText" class="text-blue-600">100%</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('zoomRange', -5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
+              <input id="zoomRange" type="range" min="100" max="150" value="100" class="flex-1" oninput="updateZoom(this.value)" />
+              <button onclick="adjustSlider('zoomRange', 5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Source language</label>
+            <select id="sourceLangSelect" onchange="state.source_language=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800">
+              <option value="Auto-detect">Auto-detect</option>
+              <option value="zh">Chinese</option>
+              <option value="en">English</option>
+              <option value="es">Spanish</option>
+              <option value="ru">Russian</option>
+              <option value="hi">Hindi</option>
+              <option value="th">Thai</option>
+              <option value="ko">Korean</option>
+              <option value="ja">Japanese</option>
+              <option value="vi">Vietnamese</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ==================== TAB 2: VOICE ==================== -->
+        <div id="tab-voice" class="hidden space-y-4 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+          <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
+            <span>Voice</span>
+            <span id="voiceCountLabel">2 မြန်မာ voices</span>
+          </div>
+
+          <div class="border border-blue-200 bg-blue-50/20 rounded-2xl p-3 flex items-center justify-between">
+            <div onclick="toggleVoiceDropdown()" class="flex items-center gap-3 cursor-pointer flex-1">
+              <div id="selectedVoiceAvatar" class="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-sm">T</div>
+              <div>
+                <div id="selectedVoiceTitle" class="font-bold text-sm text-slate-900">Thiha</div>
+                <div id="selectedVoiceSub" class="text-xs text-slate-500">Male · Myanmar (Burma)</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="toggleVoiceDropdown()" id="voiceChevronBtn" class="p-1 text-slate-500 font-bold">⌃</button>
+              <button onclick="playVoiceSample(state.voice_name)" class="w-9 h-9 rounded-full bg-blue-50 text-blue-700 flex items-center justify-center hover:bg-blue-100 active:scale-95 transition">
+                ▶
+              </button>
+            </div>
+          </div>
+
+          <div id="voicePickerBox" class="border border-slate-200 rounded-2xl p-3 space-y-3">
+            <div class="flex gap-2">
+              <input id="voiceSearchInput" type="text" placeholder="Search voices..." oninput="renderVoiceList()" class="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-slate-50" />
+              <div class="bg-slate-100 p-1 rounded-xl flex text-xs font-semibold">
+                <button onclick="setGenderFilter('All')" id="gFilter-All" class="px-2.5 py-1 rounded-lg bg-white shadow-sm">All</button>
+                <button onclick="setGenderFilter('Male')" id="gFilter-Male" class="px-2.5 py-1 rounded-lg text-slate-600">Male</button>
+                <button onclick="setGenderFilter('Female')" id="gFilter-Female" class="px-2.5 py-1 rounded-lg text-slate-600">Female</button>
+              </div>
+            </div>
+            <div id="voiceGroupHeader" class="text-xs font-semibold text-slate-500">Myanmar (Burma) · 2</div>
+            <div id="voiceListContainer" class="space-y-1.5"></div>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Speed</span>
+              <span id="speedValText" class="text-blue-600">+30%</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('speedRange', -5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
+              <input id="speedRange" type="range" min="-20" max="60" value="30" class="flex-1" oninput="updateVoiceSpeed(this.value)" />
+              <button onclick="adjustSlider('speedRange', 5)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Pitch</span>
+              <span id="pitchValText" class="text-blue-600">+0Hz</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('pitchRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">-</button>
+              <input id="pitchRange" type="range" min="-20" max="20" value="0" class="flex-1" oninput="updateVoicePitch(this.value)" />
+              <button onclick="adjustSlider('pitchRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold text-lg">+</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ==================== TAB 3: CAPTIONS ==================== -->
+        <div id="tab-captions" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <div>
+              <div id="blurCountTitle" class="text-sm font-bold text-slate-800">0 blur box(es)</div>
+              <div class="text-[11px] text-slate-500">Draw on the video, drag to move</div>
+            </div>
+            <button onclick="addBlurBox()" class="px-3.5 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl hover:bg-blue-100">+ Add</button>
+          </div>
+
+          <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
+              <label class="ios-switch">
+                <input id="chkFullBand" type="checkbox" checked onchange="toggleFullBand(this.checked)" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+
+            <div id="fullBandControls" class="space-y-3 pt-1">
+              <div>
+                <div class="flex justify-between text-xs font-bold mb-1">
+                  <span>Band height</span>
+                  <span id="bandHeightVal" class="text-blue-600">18%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="adjustSlider('bandHeightRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                  <input id="bandHeightRange" type="range" min="6" max="40" value="18" class="flex-1" oninput="updateFullBand()" />
+                  <button onclick="adjustSlider('bandHeightRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex justify-between text-xs font-bold mb-1">
+                  <span>Band from bottom</span>
+                  <span id="bandBottomVal" class="text-blue-600">0%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="adjustSlider('bandBottomRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                  <input id="bandBottomRange" type="range" min="0" max="40" value="0" class="flex-1" oninput="updateFullBand()" />
+                  <button onclick="adjustSlider('bandBottomRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex justify-between text-xs font-bold mb-1">
+                  <span>Blur</span>
+                  <span id="bandBlurVal" class="text-blue-600">12</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="adjustSlider('bandBlurRange', -2)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                  <input id="bandBlurRange" type="range" min="2" max="30" value="12" class="flex-1" oninput="updateFullBand()" />
+                  <button onclick="adjustSlider('bandBlurRange', 2)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <div class="text-sm font-bold text-slate-800">Captions</div>
+            <label class="ios-switch">
+              <input type="checkbox" checked onchange="toggleCaptionsOn(this.checked)" />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Font</label>
+            <select onchange="state.font=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold">
+              <option value="A13 WenYoe">A13 WenYoe</option>
+              <option value="Padauk">Padauk Bold</option>
+              <option value="Noto Sans Myanmar">Noto Sans Myanmar</option>
+            </select>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Text size</span>
+              <span id="textSizeVal" class="text-blue-600">32px</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('textSizeRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+              <input id="textSizeRange" type="range" min="12" max="48" value="32" class="flex-1" oninput="updateCaptionSize(this.value)" />
+              <button onclick="adjustSlider('textSizeRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Text colour</label>
+            <div class="flex items-center gap-3 mt-2">
+              <button onclick="setCaptionColor('#FFFFFF', this)" class="color-swatch w-8 h-8 rounded-full bg-white border border-slate-300"></button>
+              <button onclick="setCaptionColor('#FFFF00', this)" class="color-swatch w-8 h-8 rounded-full bg-[#FFFF00] ring-2 ring-offset-2 ring-blue-700"></button>
+              <button onclick="setCaptionColor('#7DD3FC', this)" class="color-swatch w-8 h-8 rounded-full bg-[#7DD3FC]"></button>
+              <button onclick="setCaptionColor('#F472B6', this)" class="color-swatch w-8 h-8 rounded-full bg-[#F472B6]"></button>
+              <button onclick="setCaptionColor('#86EFAC', this)" class="color-swatch w-8 h-8 rounded-full bg-[#86EFAC]"></button>
+              <button onclick="setCaptionColor('#FB923C', this)" class="color-swatch w-8 h-8 rounded-full bg-[#FB923C]"></button>
+              <label class="w-8 h-8 rounded-full cursor-pointer flex items-center justify-center bg-gradient-to-tr from-pink-500 via-yellow-400 to-cyan-400">
+                <input type="color" value="#ffff00" onchange="setCaptionColor(this.value, null)" class="opacity-0 w-0 h-0" />
+              </label>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <span class="text-sm font-bold text-slate-800">Outline colour</span>
+            <input type="color" value="#000000" onchange="setOutlineColor(this.value)" class="w-10 h-7 rounded cursor-pointer border border-slate-300 bg-black" />
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Outline width</span>
+              <span id="outlineWVal" class="text-blue-600">4px</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('outlineWRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+              <input id="outlineWRange" type="range" min="0" max="8" value="4" class="flex-1" oninput="updateOutlineWidth(this.value)" />
+              <button onclick="adjustSlider('outlineWRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <span class="text-sm font-bold text-slate-800">Bold</span>
+            <label class="ios-switch">
+              <input type="checkbox" checked onchange="state.bold=this.checked" />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+
+          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <span class="text-sm font-bold text-slate-800">Box (background)</span>
+            <label class="ios-switch">
+              <input type="checkbox" onchange="toggleCaptionBgBox(this.checked)" />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Position</label>
+            <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
+              <button onclick="setCapPosPreset(89, 'Bottom')" id="posBtn-Bottom" class="py-2 rounded-lg text-slate-600">Bottom</button>
+              <button onclick="setCapPosPreset(55, 'Middle')" id="posBtn-Middle" class="py-2 rounded-lg text-slate-600">Middle</button>
+              <button onclick="setCapPosPreset(state.vertical_position, 'Custom')" id="posBtn-Custom" class="py-2 rounded-lg bg-white shadow-sm text-slate-900">Custom</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Vertical position</span>
+              <span id="vertPosVal" class="text-blue-600">89%</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('vertPosRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+              <input id="vertPosRange" type="range" min="10" max="95" value="89" class="flex-1" oninput="updateVerticalPos(this.value)" />
+              <button onclick="adjustSlider('vertPosRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Words per caption</span>
+              <span id="wordsCapVal" class="text-blue-600">9</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('wordsCapRange', -1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+              <input id="wordsCapRange" type="range" min="3" max="16" value="9" class="flex-1" oninput="state.words_per_caption=parseInt(this.value); document.getElementById('wordsCapVal').innerText=this.value" />
+              <button onclick="adjustSlider('wordsCapRange', 1)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+            </div>
+            <p class="text-[11px] text-amber-700 font-medium mt-1">Cannot be changed after the video is made — set it now</p>
+          </div>
+
+          <div>
+            <div class="flex justify-between text-sm font-bold mb-1.5">
+              <span>Caption width</span>
+              <span id="capWidthVal" class="text-blue-600">96%</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <button onclick="adjustSlider('capWidthRange', -2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">-</button>
+              <input id="capWidthRange" type="range" min="50" max="100" value="96" class="flex-1" oninput="updateCaptionWidth(this.value)" />
+              <button onclick="adjustSlider('capWidthRange', 2)" class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 font-bold">+</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ==================== TAB 4: EXTRAS ==================== -->
+        <div id="tab-extras" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
+          <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-bold text-slate-800">Watermark text</span>
+              <label class="ios-switch">
+                <input type="checkbox" id="chkWatermark" onchange="toggleWatermark(this.checked)" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+
+            <div id="watermarkControls" class="hidden space-y-3 pt-1">
+              <div>
+                <input type="text" id="watermarkInput" value="DeepRecap" oninput="updateWatermarkText(this.value)"
+                       class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold" />
+                <p class="text-[11px] text-slate-500 mt-1">English only (A–Z, numbers, symbols)</p>
+              </div>
+
+              <div>
+                <div class="flex justify-between text-xs font-bold mb-1">
+                  <span>Text size</span>
+                  <span id="wmSizeVal" class="text-blue-600">17px</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="adjustSlider('wmSizeRange', -1)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                  <input id="wmSizeRange" type="range" min="10" max="36" value="17" class="flex-1" oninput="state.watermark_size=parseInt(this.value); document.getElementById('wmSizeVal').innerText=this.value+'px'" />
+                  <button onclick="adjustSlider('wmSizeRange', 1)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex justify-between text-xs font-bold mb-1">
+                  <span>Opacity</span>
+                  <span id="wmOpVal" class="text-blue-600">65%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="adjustSlider('wmOpRange', -5)" class="w-8 h-8 rounded-lg border bg-white font-bold">-</button>
+                  <input id="wmOpRange" type="range" min="10" max="100" value="65" class="flex-1" oninput="state.watermark_opacity=parseInt(this.value); document.getElementById('wmOpVal').innerText=this.value+'%'; document.getElementById('watermarkPreview').style.opacity=this.value/100" />
+                  <button onclick="adjustSlider('wmOpRange', 5)" class="w-8 h-8 rounded-lg border bg-white font-bold">+</button>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between pt-1">
+                <span class="text-xs font-bold text-slate-700">Move around the screen</span>
+                <label class="ios-switch">
+                  <input type="checkbox" onchange="state.watermark_move=this.checked" />
+                  <span class="ios-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-sm font-bold text-slate-800">Logo (round)</div>
+                <div class="text-[11px] text-slate-500">PNG / JPG</div>
+              </div>
+              <label class="ios-switch">
+                <input type="checkbox" onchange="document.getElementById('logoUploadBox').classList.toggle('hidden', !this.checked)" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+            <div id="logoUploadBox" class="hidden pt-2">
+              <input type="file" id="logoInput" accept="image/png,image/jpeg" class="text-xs text-slate-600" />
+            </div>
+          </div>
+
+          <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-sm font-bold text-slate-800">AI caption + hashtags</div>
+                <div class="text-[11px] text-slate-500">TikTok caption · hashtags · thumbnail</div>
+              </div>
+              <label class="ios-switch">
+                <input type="checkbox" onchange="state.ai_hashtags=this.checked" />
+                <span class="ios-slider"></span>
+              </label>
+            </div>
+
+            <textarea id="hashtagsInput" rows="2" oninput="state.default_hashtags=this.value"
+                      class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 leading-relaxed">#shortdramareview #myanmartiktok🇲🇲 #ဘာသာပြန်ဇာတ်လမ်းများ</textarea>
+
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-bold text-slate-800">Add #fyp</span>
+              <label class="ios-switch">
+                <input type="checkbox" checked onchange="state.add_fyp=this.checked" />
                 <span class="ios-slider"></span>
               </label>
             </div>
           </div>
         </div>
 
-        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-          <div class="flex items-center justify-between">
-            <div>
-              <div class="text-sm font-bold text-slate-800">Logo (round)</div>
-              <div class="text-[11px] text-slate-500">PNG / JPG</div>
+      </div>
+    </div>
+
+    <!-- ================= 3. IN-PAGE WORKING / PROGRESS VIEW (FROM VIDEO 0:24 - 1:29) ================= -->
+    <div id="workingView" class="hidden px-3 pt-1 space-y-3 flex-1">
+      <!-- Main 7-Step Card -->
+      <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-200/80 space-y-4">
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-3 min-w-0">
+            <div id="topSpinner" class="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
+            <div class="min-w-0">
+              <div id="progStepTitle" class="font-extrabold text-lg text-slate-900 leading-tight">Extract audio</div>
+              <div id="progSubMeta" class="text-xs text-slate-500 truncate">video.mp4 · AI Recap</div>
             </div>
-            <label class="ios-switch">
-              <input type="checkbox" onchange="document.getElementById('logoUploadBox').classList.toggle('hidden', !this.checked)" />
-              <span class="ios-slider"></span>
-            </label>
           </div>
-          <div id="logoUploadBox" class="hidden pt-2">
-            <input type="file" id="logoInput" accept="image/png,image/jpeg" class="text-xs text-slate-600" />
-          </div>
+          <div id="progPercentText" class="text-3xl font-extrabold text-blue-600">0%</div>
         </div>
 
-        <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
-          <div class="flex items-center justify-between">
-            <div>
-              <div class="text-sm font-bold text-slate-800">AI caption + hashtags</div>
-              <div class="text-[11px] text-slate-500">TikTok caption · hashtags · thumbnail</div>
-            </div>
-            <label class="ios-switch">
-              <input type="checkbox" onchange="state.ai_hashtags=this.checked" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
+        <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+          <div id="progBarFill" class="h-full bg-blue-600 rounded-full transition-all duration-500" style="width: 5%"></div>
+        </div>
 
-          <textarea id="hashtagsInput" rows="2" oninput="state.default_hashtags=this.value"
-                    class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 leading-relaxed">#shortdramareview #myanmartiktok🇲🇲 #ဘာသာပြန်ဇာတ်လမ်းများ</textarea>
+        <div class="flex justify-between text-xs font-medium text-slate-500">
+          <span id="progElapsed">Elapsed 0:00</span>
+          <span id="progEta">About --:-- left</span>
+        </div>
 
-          <div class="flex items-center justify-between">
-            <span class="text-sm font-bold text-slate-800">Add #fyp</span>
-            <label class="ios-switch">
-              <input type="checkbox" checked onchange="state.add_fyp=this.checked" />
-              <span class="ios-slider"></span>
-            </label>
-          </div>
+        <div id="stepListContainer" class="space-y-1.5 pt-1 text-sm font-semibold"></div>
+
+        <p id="workingSubNotice" class="text-xs text-slate-500 leading-relaxed pt-1">
+          Server ပေါ်တွင် ထုတ်ပေးနေပါသည် — ဗီဒီယိုထုတ်နေစဉ် TikTok သို့မဟုတ် အခြား App များကို စိတ်ကြိုက် ကြည့်ရှုနိုင်ပါသည်။
+        </p>
+      </div>
+
+      <!-- Amber Info Callout Box -->
+      <div class="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-3.5 text-xs text-amber-900 leading-relaxed flex gap-2.5">
+        <span>⚠️</span>
+        <span>ပြီးဆုံးသွားပါက ဗီဒီယိုဖိုင်ကို ၂ စက္ကန့်အတွင်း သင့်ဖုန်းထဲသို့ အလိုအလျောက် ဒေါင်းလုဒ် (Auto-Download) ဆွဲပေးပါမည်။</span>
+      </div>
+
+      <!-- Expandable Details (log) Accordion (From Video 0:38 - 1:29) -->
+      <div class="bg-white rounded-2xl border border-slate-200/80 overflow-hidden">
+        <button onclick="toggleDetailsLog()" class="w-full px-4 py-3.5 flex items-center justify-between text-sm font-bold text-slate-800">
+          <span>Details (log)</span>
+          <span id="detailsChevron" class="text-slate-400">⌄</span>
+        </button>
+        <div id="detailsLogBody" class="px-4 pb-4 pt-1 border-t border-slate-100 text-xs font-mono text-slate-600 space-y-1 max-h-48 overflow-y-auto">
+          <div>0:00 ဗီဒီယိုထဲက အသံကို ထုတ်ယူနေပါတယ်...</div>
         </div>
       </div>
 
+      <!-- Completed Download & AI Caption Box -->
+      <div id="completedActions" class="hidden bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-3">
+        <div class="text-sm font-bold text-emerald-900">✓ ဗီဒီယို ထုတ်ပြီးပါပြီ! (Auto-Download ဆွဲပြီးပါပြီ)</div>
+        <div id="aiCaptionResultBox" class="hidden p-2.5 bg-white rounded-xl text-xs text-slate-700 whitespace-pre-wrap border border-emerald-100"></div>
+        <div class="flex gap-2">
+          <a id="downloadVideoBtn" href="#" download class="flex-1 py-2.5 bg-emerald-600 text-white text-center rounded-xl font-bold text-sm shadow">
+            ⬇ Download Again
+          </a>
+          <button onclick="resetToEditor()" class="px-4 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold text-xs">
+            Back
+          </button>
+        </div>
+      </div>
+
+      <!-- Cancel Button -->
+      <button id="cancelJobBtn" onclick="cancelActiveJob()" class="w-full py-3.5 bg-white border border-slate-200 rounded-2xl font-bold text-sm text-rose-600 shadow-xs hover:bg-rose-50 transition">
+        Cancel
+      </button>
     </div>
 
-    <!-- ================= 5. STICKY BOTTOM SUMMARY & START BAR ================= -->
-    <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-3 flex items-center justify-between z-30">
+    <!-- ================= 4. STICKY BOTTOM SUMMARY & START BAR ================= -->
+    <div id="bottomStartBar" class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-3 flex items-center justify-between z-30">
       <div class="min-w-0 pr-2">
         <div id="summaryTopLine" class="text-xs font-bold text-slate-900 truncate">Using your own API keys · 0:18</div>
         <div id="summaryBottomLine" class="text-[11px] text-slate-500 truncate">Original ratio · Blur 1 · Captions on · မြန်မာ</div>
@@ -682,6 +757,53 @@
       </button>
     </div>
 
+  </div>
+
+  <!-- ================= 5. FULL-SCREEN INTERACTIVE CROP MODAL (FROM VIDEO 0:02 - 0:15) ================= -->
+  <div id="cropModal" class="hidden fixed inset-0 bg-black z-50 flex flex-col justify-center items-center p-3">
+    <div class="w-full max-w-md space-y-3">
+      <!-- Top Bar: Drag a corner... | Remove | Done -->
+      <div class="flex items-center justify-between gap-2">
+        <div class="px-3.5 py-2 rounded-full bg-stone-900 text-white/90 text-xs font-medium border border-white/15 truncate">
+          ⤡ Drag a corner to crop
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="resetCropBox()" class="px-4 py-2 rounded-full bg-stone-900 text-white text-xs font-semibold border border-white/15">
+            Remove
+          </button>
+          <button onclick="closeCropModal()" class="px-5 py-2 rounded-full bg-blue-600 text-white text-xs font-bold shadow">
+            ✓ Done
+          </button>
+        </div>
+      </div>
+
+      <!-- Interactive Crop Stage -->
+      <div id="cropStage" class="relative w-full aspect-video bg-stone-950 rounded-xl overflow-hidden select-none touch-none">
+        <video id="cropVideoPlayer" class="w-full h-full object-contain pointer-events-none" playsinline muted></video>
+
+        <!-- Crop Selection Box with 3x3 Grid and 4 Corner Handles -->
+        <div id="cropBoxRect" class="absolute border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.55)] cursor-move"
+             style="left: 5%; top: 5%; width: 90%; height: 90%;">
+          <!-- Rule of Thirds Grid -->
+          <div class="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
+            <div class="border-r border-b border-white/30"></div>
+            <div class="border-r border-b border-white/30"></div>
+            <div class="border-b border-white/30"></div>
+            <div class="border-r border-b border-white/30"></div>
+            <div class="border-r border-b border-white/30"></div>
+            <div class="border-b border-white/30"></div>
+            <div class="border-r border-white/30"></div>
+            <div class="border-r border-white/30"></div>
+            <div></div>
+          </div>
+          <!-- 4 Draggable Corner Dots -->
+          <div data-corner="tl" class="crop-handle w-5 h-5 rounded-full bg-white border-2 border-blue-500 absolute -left-2.5 -top-2.5 shadow"></div>
+          <div data-corner="tr" class="crop-handle w-5 h-5 rounded-full bg-white border-2 border-blue-500 absolute -right-2.5 -top-2.5 shadow"></div>
+          <div data-corner="bl" class="crop-handle w-5 h-5 rounded-full bg-white border-2 border-blue-500 absolute -left-2.5 -bottom-2.5 shadow"></div>
+          <div data-corner="br" class="crop-handle w-5 h-5 rounded-full bg-white border-2 border-blue-500 absolute -right-2.5 -bottom-2.5 shadow"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ================= 6. "OWN KEY" MODAL ================= -->
@@ -726,45 +848,6 @@
     </div>
   </div>
 
-  <!-- ================= 7. 7-STEP RENDER PROGRESS MODAL ================= -->
-  <div id="progressModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-[#f8fafc] w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-slate-100 space-y-4">
-      <div class="flex items-start justify-between">
-        <div class="flex items-center gap-3 min-w-0">
-          <div id="topSpinner" class="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
-          <div class="min-w-0">
-            <div id="progStepTitle" class="font-extrabold text-lg text-slate-900 leading-tight">Extract audio</div>
-            <div id="progSubMeta" class="text-xs text-slate-500 truncate">video.mp4 · AI Recap</div>
-          </div>
-        </div>
-        <div id="progPercentText" class="text-3xl font-extrabold text-blue-600">0%</div>
-      </div>
-
-      <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
-        <div id="progBarFill" class="h-full bg-blue-600 rounded-full transition-all duration-500" style="width: 5%"></div>
-      </div>
-
-      <div class="flex justify-between text-xs font-medium text-slate-500">
-        <span id="progElapsed">Elapsed 0:00</span>
-        <span id="progEta">About --:-- left</span>
-      </div>
-
-      <div id="stepListContainer" class="space-y-2 pt-1 text-sm font-semibold"></div>
-
-      <div id="completedActions" class="hidden pt-3 space-y-3 border-t border-slate-200">
-        <div id="aiCaptionResultBox" class="hidden p-2.5 bg-slate-100 rounded-xl text-xs text-slate-700 whitespace-pre-wrap"></div>
-        <div class="flex gap-2">
-          <a id="downloadVideoBtn" href="#" download class="flex-1 py-2.5 bg-emerald-600 text-white text-center rounded-xl font-bold text-sm shadow">
-            ⬇ Download Video
-          </a>
-          <button onclick="document.getElementById('progressModal').classList.add('hidden')" class="px-4 py-2.5 bg-slate-200 text-slate-700 rounded-xl font-bold text-xs">
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- ================= JAVASCRIPT LOGIC ================= -->
   <script>
     const VOICES = [
@@ -789,6 +872,9 @@
     let selectedVideoFile = null;
     let currentVideoDurStr = "0:18";
     let genderFilter = "All";
+    let activeJobId = localStorage.getItem("active_recap_job_id") || null;
+    let pollTimer = null;
+    let autoDownloadedJobs = new Set();
 
     const state = {
       mode: "AI Recap",
@@ -799,6 +885,10 @@
       mirror: true,
       random_4px_crop: false,
       zoom: 100,
+      crop_x: 0,
+      crop_y: 0,
+      crop_w: 100,
+      crop_h: 100,
       source_language: "Auto-detect",
       voice_name: "Thiha",
       voice_speed: 30,
@@ -835,9 +925,21 @@
     window.addEventListener("DOMContentLoaded", () => {
       renderVoiceList();
       initCaptionInteractions();
-      toggleMirror(true);
+      initCropBoxInteractions();
+      applyVideoTransform();
       updateFullBand();
       updateSummary();
+
+      // TikTok သို့မဟုတ် အခြား App သုံးပြီး ပြန်လာချိန်တွင် လက်ရှိ Run နေသော Job ကို အလိုအလျောက် ပြန်ချိတ်ပေးခြင်း
+      if (activeJobId) {
+        resumeExistingJob(activeJobId);
+      }
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && activeJobId) {
+        fetchJobStatusOnce(activeJobId);
+      }
     });
 
     function switchTab(tab) {
@@ -857,7 +959,9 @@
       document.getElementById("headerFilename").innerText = file.name;
       const url = URL.createObjectURL(file);
       const vp = document.getElementById("videoPlayer");
+      const cvp = document.getElementById("cropVideoPlayer");
       vp.src = url;
+      cvp.src = url;
       document.getElementById("videoPlaceholder").classList.add("hidden");
 
       vp.onloadedmetadata = () => {
@@ -890,9 +994,106 @@
       if (st.requestFullscreen) st.requestFullscreen();
     }
 
-    function toggleFreeCropHint() {
-      document.getElementById("videoStage").classList.toggle("ring-2");
-      document.getElementById("videoStage").classList.toggle("ring-blue-500");
+    // ================= LIVE ZOOM & MIRROR TRANSFORM =================
+    function applyVideoTransform() {
+      const vp = document.getElementById("videoPlayer");
+      const zoomScale = (state.zoom || 100) / 100.0;
+      const flipX = state.mirror ? -1 : 1;
+      vp.style.transform = `scaleX(${flipX * zoomScale}) scaleY(${zoomScale})`;
+    }
+
+    function toggleMirror(checked) {
+      state.mirror = checked;
+      applyVideoTransform();
+    }
+
+    function updateZoom(val) {
+      state.zoom = parseInt(val);
+      document.getElementById("zoomValText").innerText = `${val}%`;
+      applyVideoTransform();
+    }
+
+    // ================= INTERACTIVE CROP MODAL =================
+    function openCropModal() {
+      document.getElementById("cropModal").classList.remove("hidden");
+    }
+
+    function closeCropModal() {
+      document.getElementById("cropModal").classList.add("hidden");
+    }
+
+    function resetCropBox() {
+      state.crop_x = 0;
+      state.crop_y = 0;
+      state.crop_w = 100;
+      state.crop_h = 100;
+      const box = document.getElementById("cropBoxRect");
+      box.style.left = "0%";
+      box.style.top = "0%";
+      box.style.width = "100%";
+      box.style.height = "100%";
+    }
+
+    function initCropBoxInteractions() {
+      const stage = document.getElementById("cropStage");
+      const box = document.getElementById("cropBoxRect");
+      let dragMode = null;
+      let startX = 0, startY = 0;
+      let startL = 5, startT = 5, startW = 90, startH = 90;
+
+      box.addEventListener("pointerdown", e => {
+        const corner = e.target.getAttribute("data-corner");
+        dragMode = corner || "move";
+        startX = e.clientX;
+        startY = e.clientY;
+        startL = parseFloat(box.style.left) || 0;
+        startT = parseFloat(box.style.top) || 0;
+        startW = parseFloat(box.style.width) || 100;
+        startH = parseFloat(box.style.height) || 100;
+        box.setPointerCapture(e.pointerId);
+        e.stopPropagation();
+      });
+
+      window.addEventListener("pointermove", e => {
+        if (!dragMode) return;
+        const rect = stage.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const dx = ((e.clientX - startX) / rect.width) * 100;
+        const dy = ((e.clientY - startY) / rect.height) * 100;
+
+        let l = startL, t = startT, w = startW, h = startH;
+        if (dragMode === "move") {
+          l = Math.max(0, Math.min(100 - w, startL + dx));
+          t = Math.max(0, Math.min(100 - h, startT + dy));
+        } else {
+          if (dragMode.includes("l")) {
+            l = Math.max(0, Math.min(startL + startW - 20, startL + dx));
+            w = startW - (l - startL);
+          }
+          if (dragMode.includes("r")) {
+            w = Math.max(20, Math.min(100 - startL, startW + dx));
+          }
+          if (dragMode.includes("t")) {
+            t = Math.max(0, Math.min(startT + startH - 20, startT + dy));
+            h = startH - (t - startT);
+          }
+          if (dragMode.includes("b")) {
+            h = Math.max(20, Math.min(100 - startT, startH + dy));
+          }
+        }
+
+        box.style.left = `${l}%`;
+        box.style.top = `${t}%`;
+        box.style.width = `${w}%`;
+        box.style.height = `${h}%`;
+
+        state.crop_x = Math.round(l);
+        state.crop_y = Math.round(t);
+        state.crop_w = Math.round(w);
+        state.crop_h = Math.round(h);
+      });
+
+      window.addEventListener("pointerup", () => { dragMode = null; });
     }
 
     function finishOverlayEdit() {
@@ -931,6 +1132,7 @@
           radio.innerHTML = "";
         }
       });
+      document.getElementById("proServerBadge").classList.toggle("hidden", m !== "Pro AI Recap");
       if (m === "AI Recap") selectOutLang("မြန်မာ");
       updateSummary();
     }
@@ -959,16 +1161,6 @@
       state.fit_mode = fit;
       document.getElementById("fitBtn-crop").className = fit === "crop" ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-600";
       document.getElementById("fitBtn-pad").className = fit === "pad" ? "py-2 rounded-lg bg-white shadow-sm text-slate-900" : "py-2 rounded-lg text-slate-600";
-    }
-
-    function toggleMirror(checked) {
-      state.mirror = checked;
-      document.getElementById("videoPlayer").style.transform = checked ? "scaleX(-1)" : "scaleX(1)";
-    }
-
-    function updateZoom(val) {
-      state.zoom = parseInt(val);
-      document.getElementById("zoomValText").innerText = `${val}%`;
     }
 
     function setGenderFilter(g) {
@@ -1223,6 +1415,37 @@
       closeKeyModal();
     }
 
+    function toggleDetailsLog() {
+      const body = document.getElementById("detailsLogBody");
+      body.classList.toggle("hidden");
+      document.getElementById("detailsChevron").innerText = body.classList.contains("hidden") ? "⌄" : "⌃";
+    }
+
+    function showWorkingScreen() {
+      document.getElementById("editorMainView").classList.add("hidden");
+      document.getElementById("bottomStartBar").classList.add("hidden");
+      document.getElementById("workingView").classList.remove("hidden");
+      document.getElementById("headerFilename").innerText = "Working...";
+    }
+
+    function resetToEditor() {
+      localStorage.removeItem("active_recap_job_id");
+      activeJobId = null;
+      if (pollTimer) clearInterval(pollTimer);
+      document.getElementById("workingView").classList.add("hidden");
+      document.getElementById("editorMainView").classList.remove("hidden");
+      document.getElementById("bottomStartBar").classList.remove("hidden");
+      document.getElementById("headerFilename").innerText = selectedVideoFile ? selectedVideoFile.name : "ဗီဒီယို ရွေးချယ်ရန် နှိပ်ပါ";
+    }
+
+    async function cancelActiveJob() {
+      if (activeJobId) {
+        await fetch(`/api/cancel/${activeJobId}`, { method: "POST" }).catch(() => {});
+      }
+      resetToEditor();
+    }
+
+    // ================= START JOB & 2-SECOND BLOB AUTO-DOWNLOAD =================
     async function startRecapJob() {
       if (!selectedVideoFile) {
         alert("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင်အရင် ရွေးချယ်ပေးပါ");
@@ -1233,8 +1456,13 @@
         return;
       }
 
-      document.getElementById("progressModal").classList.remove("hidden");
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
+      }
+
+      showWorkingScreen();
       document.getElementById("completedActions").classList.add("hidden");
+      document.getElementById("cancelJobBtn").classList.remove("hidden");
       document.getElementById("topSpinner").classList.remove("hidden");
 
       const fd = new FormData();
@@ -1245,7 +1473,20 @@
 
       const res = await fetch("/api/start-recap", { method: "POST", body: fd });
       const data = await res.json();
-      pollJobStatus(data.job_id);
+      activeJobId = data.job_id;
+      localStorage.setItem("active_recap_job_id", activeJobId);
+      pollJobStatus(activeJobId);
+    }
+
+    async function resumeExistingJob(jobId) {
+      const res = await fetch(`/api/status/${jobId}`).catch(() => null);
+      if (!res || !res.ok) {
+        localStorage.removeItem("active_recap_job_id");
+        activeJobId = null;
+        return;
+      }
+      showWorkingScreen();
+      pollJobStatus(jobId);
     }
 
     function renderStepChecklist(stepsMap) {
@@ -1274,39 +1515,90 @@
       }).join("");
     }
 
-    async function pollJobStatus(jobId) {
-      const timer = setInterval(async () => {
-        const res = await fetch(`/api/status/${jobId}`);
-        if (!res.ok) return;
-        const job = await res.json();
+    // ဗီဒီယိုပြီးဆုံးသည်နှင့် Browser Memory (Blob) သို့ ဆွဲယူပြီး ၂ စက္ကန့်အတွင်း Auto-Download ချပေးခြင်း
+    async function triggerInstantAutoDownload(outputUrl, filename, jobId) {
+      if (autoDownloadedJobs.has(jobId)) return;
+      autoDownloadedJobs.add(jobId);
 
-        const curLabel = STEP_LABELS.find(x => x.key === job.current_step)?.label || "Processing";
-        document.getElementById("progStepTitle").innerText = curLabel;
-        document.getElementById("progSubMeta").innerText = `${job.filename} · ${job.mode} · ${state.ratio}`;
-        document.getElementById("progPercentText").innerText = `${job.progress}%`;
-        document.getElementById("progBarFill").style.width = `${job.progress}%`;
-        document.getElementById("progElapsed").innerText = `Elapsed ${formatSec(job.elapsed_sec)}`;
-        document.getElementById("progEta").innerText = `About ${formatSec(job.eta_sec)} left`;
+      const cleanName = "Recap_" + (filename || "video.mp4");
+      try {
+        const response = await fetch(outputUrl);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
 
-        renderStepChecklist(job.steps);
+        const dlBtn = document.getElementById("downloadVideoBtn");
+        dlBtn.href = blobUrl;
+        dlBtn.download = cleanName;
 
-        if (job.status === "completed") {
-          clearInterval(timer);
-          document.getElementById("topSpinner").classList.add("hidden");
-          document.getElementById("progStepTitle").innerText = "Completed!";
-          document.getElementById("completedActions").classList.remove("hidden");
-          document.getElementById("downloadVideoBtn").href = job.output_url;
-          if (job.tiktok_caption) {
-            const capBox = document.getElementById("aiCaptionResultBox");
-            capBox.innerText = job.tiktok_caption;
-            capBox.classList.remove("hidden");
-          }
-        } else if (job.status === "error") {
-          clearInterval(timer);
-          document.getElementById("topSpinner").classList.add("hidden");
-          alert("Error: " + job.error);
+        const tempLink = document.createElement("a");
+        tempLink.href = blobUrl;
+        tempLink.download = cleanName;
+        document.body.appendChild(tempLink);
+        tempLink.click();
+        document.body.removeChild(tempLink);
+      } catch (e) {
+        const dlBtn = document.getElementById("downloadVideoBtn");
+        dlBtn.href = outputUrl;
+        dlBtn.download = cleanName;
+        window.location.href = outputUrl;
+      }
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("ဗီဒီယို ထုတ်ပြီးပါပြီ!", {
+          body: "သင့်ဖုန်းထဲသို့ အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။"
+        });
+      }
+    }
+
+    async function fetchJobStatusOnce(jobId) {
+      const res = await fetch(`/api/status/${jobId}`).catch(() => null);
+      if (!res || !res.ok) return;
+      const job = await res.json();
+
+      const curLabel = STEP_LABELS.find(x => x.key === job.current_step)?.label || "Processing";
+      document.getElementById("progStepTitle").innerText = curLabel;
+      document.getElementById("progSubMeta").innerText = `${job.filename || 'video.mp4'} · ${job.mode} · ${state.ratio}`;
+      document.getElementById("progPercentText").innerText = `${job.progress}%`;
+      document.getElementById("progBarFill").style.width = `${job.progress}%`;
+      document.getElementById("progElapsed").innerText = `Elapsed ${formatSec(job.elapsed_sec)}`;
+      document.getElementById("progEta").innerText = `About ${formatSec(job.eta_sec)} left`;
+
+      renderStepChecklist(job.steps);
+
+      if (Array.isArray(job.logs)) {
+        const logBox = document.getElementById("detailsLogBody");
+        logBox.innerHTML = job.logs.map(l => `<div>${l}</div>`).join("");
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+
+      if (job.status === "completed") {
+        if (pollTimer) clearInterval(pollTimer);
+        localStorage.removeItem("active_recap_job_id");
+        document.getElementById("topSpinner").classList.add("hidden");
+        document.getElementById("progStepTitle").innerText = "Completed!";
+        document.getElementById("completedActions").classList.remove("hidden");
+        document.getElementById("cancelJobBtn").classList.add("hidden");
+
+        if (job.tiktok_caption) {
+          const capBox = document.getElementById("aiCaptionResultBox");
+          capBox.innerText = job.tiktok_caption;
+          capBox.classList.remove("hidden");
         }
-      }, 2000);
+
+        await triggerInstantAutoDownload(job.output_url, job.filename, jobId);
+      } else if (job.status === "error" || job.status === "cancelled") {
+        if (pollTimer) clearInterval(pollTimer);
+        localStorage.removeItem("active_recap_job_id");
+        document.getElementById("topSpinner").classList.add("hidden");
+        if (job.status === "error") alert("Error: " + job.error);
+        resetToEditor();
+      }
+    }
+
+    function pollJobStatus(jobId) {
+      if (pollTimer) clearInterval(pollTimer);
+      fetchJobStatusOnce(jobId);
+      pollTimer = setInterval(() => fetchJobStatusOnce(jobId), 2000);
     }
   </script>
 </body>
