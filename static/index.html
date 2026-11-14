@@ -74,10 +74,20 @@
       border-radius: 999px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.2);
     }
+    /* Mobile-friendly text-shadow outline to prevent solid black text bug */
     .caption-preview-text {
-      paint-order: stroke fill;
-      -webkit-text-stroke: var(--outline-w, 3px) var(--outline-color, #000000);
-      text-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+      --ow: 2px;
+      --oc: #000000;
+      text-shadow:
+        calc(-1 * var(--ow)) calc(-1 * var(--ow)) 0 var(--oc),
+        0px                  calc(-1 * var(--ow)) 0 var(--oc),
+        var(--ow)            calc(-1 * var(--ow)) 0 var(--oc),
+        calc(-1 * var(--ow)) 0px                  0 var(--oc),
+        var(--ow)            0px                  0 var(--oc),
+        calc(-1 * var(--ow)) var(--ow)            0 var(--oc),
+        0px                  var(--ow)            0 var(--oc),
+        var(--ow)            var(--ow)            0 var(--oc),
+        0px                  2px                  4px rgba(0,0,0,0.5);
     }
   </style>
 </head>
@@ -115,30 +125,24 @@
           </span>
         </div>
 
-        <!-- Draggable Blur Boxes Layer -->
         <div id="blurBoxesLayer" class="absolute inset-0 pointer-events-none z-10"></div>
-
-        <!-- Full Band Subtitle Blur Preview (Controlled by Band height, Band from bottom, Blur) -->
         <div id="fullBandPreview" class="absolute inset-x-0 bg-white/10 border-t border-b border-dashed border-white/60 z-10 pointer-events-none"
              style="bottom: 0%; height: 18%; backdrop-filter: blur(12px);"></div>
-
-        <!-- Live Watermark Text Preview -->
         <div id="watermarkPreview" class="hidden absolute right-4 bottom-8 text-white font-semibold pointer-events-none z-20" style="font-size: 14px; opacity: 0.65;">
           DeepRecap
         </div>
 
-        <!-- Draggable & Resizable Caption Preview Box -->
         <div id="captionBox" class="absolute left-1/2 -translate-x-1/2 w-[96%] border border-dashed border-white/90 rounded-full py-1.5 px-4 flex items-center justify-center cursor-move z-20 bg-black/15"
              style="top: 78%;">
           <span id="captionPreviewText" class="caption-preview-text font-bold text-center leading-tight select-none"
-                style="color: #ffff00; font-size: 20px; --outline-color: #000000; --outline-w: 3px;">
+                style="color: #ffff00; font-size: 20px; --oc: #000000; --ow: 2px;">
             ဒီနေရာမှာ စာတန်းထိုး ပေါ်မယ်
           </span>
           <div id="captionResizeDot" class="w-4 h-4 rounded-full bg-white border-2 border-blue-500 absolute right-1.5 top-1/2 -translate-y-1/2 shadow cursor-ew-resize"></div>
         </div>
       </div>
 
-      <!-- 5 Circular Action Buttons Row (Delete, Blur, Edit, Crop, Done) from Video 0:04 -->
+      <!-- 5 Circular Action Buttons Row -->
       <div class="flex items-center justify-center gap-4 my-2.5">
         <div class="flex flex-col items-center gap-1">
           <button onclick="deleteSelectedBlur()" class="w-10 h-10 rounded-full bg-rose-200/80 text-rose-700 flex items-center justify-center hover:bg-rose-300 active:scale-95 transition">
@@ -162,7 +166,7 @@
         </div>
 
         <div class="flex flex-col items-center gap-1">
-          <button onclick="toggleFreeCropHint()" id="cropActionBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-sm active:scale-95 transition">
+          <button onclick="toggleFreeCropHint()" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-sm active:scale-95 transition">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2"/>
             </svg>
@@ -178,7 +182,6 @@
         </div>
       </div>
 
-      <!-- Video Seekbar Control -->
       <div class="bg-slate-600 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
         <button onclick="togglePlayVideo()" id="playPauseBtn" class="text-white focus:outline-none">
           <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -400,7 +403,6 @@
           <button onclick="addBlurBox()" class="px-3.5 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl hover:bg-blue-100">+ Add</button>
         </div>
 
-        <!-- Full band (cover original subtitles) + 3 Sub-Sliders (Band height, Band from bottom, Blur) -->
         <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
           <div class="flex items-center justify-between">
             <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
@@ -411,7 +413,6 @@
           </div>
 
           <div id="fullBandControls" class="space-y-3 pt-1">
-            <!-- Band height -->
             <div>
               <div class="flex justify-between text-xs font-bold mb-1">
                 <span>Band height</span>
@@ -424,7 +425,6 @@
               </div>
             </div>
 
-            <!-- Band from bottom -->
             <div>
               <div class="flex justify-between text-xs font-bold mb-1">
                 <span>Band from bottom</span>
@@ -437,7 +437,6 @@
               </div>
             </div>
 
-            <!-- Blur strength -->
             <div>
               <div class="flex justify-between text-xs font-bold mb-1">
                 <span>Blur</span>
@@ -452,7 +451,6 @@
           </div>
         </div>
 
-        <!-- Captions On/Off -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <div class="text-sm font-bold text-slate-800">Captions</div>
           <label class="ios-switch">
@@ -686,7 +684,7 @@
 
   </div>
 
-  <!-- ================= 6. "OWN KEY" MODAL (GROQ WHISPER + GEMINI 3.8) ================= -->
+  <!-- ================= 6. "OWN KEY" MODAL ================= -->
   <div id="keyModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
     <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4">
       <div class="flex items-center justify-between">
@@ -1043,7 +1041,6 @@
       document.getElementById("pitchValText").innerText = `${val >= 0 ? '+' : ''}${val}Hz`;
     }
 
-    // Full Band & Blur Box Controls (From Video 0:26 - 0:38)
     function addBlurBox() {
       state.blur_boxes += 1;
       document.getElementById("blurCountTitle").innerText = `${state.blur_boxes} blur box(es)`;
@@ -1104,13 +1101,14 @@
 
     function setOutlineColor(hex) {
       state.outline_color = hex;
-      document.getElementById("captionPreviewText").style.setProperty("--outline-color", hex);
+      document.getElementById("captionPreviewText").style.setProperty("--oc", hex);
     }
 
     function updateOutlineWidth(val) {
       state.outline_width = parseInt(val);
       document.getElementById("outlineWVal").innerText = `${val}px`;
-      document.getElementById("captionPreviewText").style.setProperty("--outline-w", `${Math.round(val * 0.7)}px`);
+      const px = Math.max(0, (parseFloat(val) * 0.55)).toFixed(1) + "px";
+      document.getElementById("captionPreviewText").style.setProperty("--ow", px);
     }
 
     function toggleCaptionBgBox(checked) {
