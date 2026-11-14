@@ -22,8 +22,9 @@ RUN mkdir -p /usr/share/fonts/truetype/custom && \
 
 # Render Paid Plan Persistent Disk လမ်းကြောင်း (/var/data)
 ENV DATA_DIR=/var/data/recap_jobs
+ENV WEB_CONCURRENCY=1
 RUN mkdir -p /var/data/recap_jobs
 
 EXPOSE 10000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000", "--workers", "1"]
