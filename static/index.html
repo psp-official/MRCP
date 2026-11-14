@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>AI Movie Recap Narrator (2026 Free API Edition)</title>
+  <title>AI Movie Recap Narrator (Groq + Gemini Edition)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Padauk:wght@400;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
@@ -14,8 +14,6 @@
       user-select: none;
       -webkit-tap-highlight-color: transparent;
     }
-
-    /* iOS-style Toggle Switch */
     .ios-switch {
       position: relative;
       display: inline-block;
@@ -54,8 +52,6 @@
     .ios-switch input:checked + .ios-slider:before {
       transform: translateX(20px);
     }
-
-    /* Custom Range Slider */
     input[type=range] {
       -webkit-appearance: none;
       appearance: none;
@@ -78,8 +74,6 @@
       border-radius: 999px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.2);
     }
-
-    /* Caption Text Outline Effect */
     .caption-preview-text {
       text-shadow:
         -1.5px -1.5px 0 var(--outline-color, #000),
@@ -92,7 +86,6 @@
 </head>
 <body class="min-h-screen flex justify-center bg-slate-200/70">
 
-  <!-- ================= MAIN APP CONTAINER ================= -->
   <div class="w-full max-w-md bg-[#f5f8fc] min-h-screen flex flex-col pb-24 relative shadow-xl">
 
     <!-- ================= 1. TOP HEADER ================= -->
@@ -118,14 +111,12 @@
       <div id="videoStage" class="relative w-full aspect-video bg-stone-900 rounded-2xl overflow-hidden shadow-md">
         <video id="videoPlayer" class="w-full h-full object-contain" playsinline></video>
 
-        <!-- Default Preview Backdrop before video is selected -->
         <div id="videoPlaceholder" class="absolute inset-0 bg-gradient-to-b from-amber-900/60 via-amber-800/45 to-stone-900 flex flex-col items-center justify-center text-white/80">
           <span class="text-xs font-medium bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-xs">
             ဗီဒီယိုဖိုင် ရွေးချယ်ရန် ဘယ်ဘက်အပေါ်က (+) ကိုနှိပ်ပါ
           </span>
         </div>
 
-        <!-- Top Overlay Buttons (+ Upload, Crop, Check) -->
         <div class="absolute top-3 inset-x-3 flex items-center justify-between z-20 pointer-events-none">
           <label for="videoInput" class="pointer-events-auto w-10 h-10 rounded-full bg-black/50 backdrop-blur-xs text-white flex items-center justify-center cursor-pointer hover:bg-black/70 active:scale-95 transition">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -147,30 +138,22 @@
           </button>
         </div>
 
-        <!-- Draggable Blur Boxes Layer -->
         <div id="blurBoxesLayer" class="absolute inset-0 pointer-events-none z-10"></div>
-
-        <!-- Full Band Subtitle Cover Preview -->
         <div id="fullBandPreview" class="hidden absolute inset-x-0 bottom-[6%] h-[16%] bg-black/75 backdrop-blur-md z-10 pointer-events-none"></div>
-
-        <!-- Live Watermark Text Preview -->
         <div id="watermarkPreview" class="hidden absolute right-4 bottom-8 text-white font-semibold pointer-events-none z-20" style="font-size: 14px; opacity: 0.65;">
           DeepRecap
         </div>
 
-        <!-- Draggable & Resizable Caption Preview Box -->
         <div id="captionBox" class="absolute left-1/2 -translate-x-1/2 w-[96%] border border-dashed border-white/90 rounded-full py-1.5 px-4 flex items-center justify-center cursor-move z-20 bg-black/15"
              style="top: 78%;">
           <span id="captionPreviewText" class="caption-preview-text font-bold text-center leading-tight select-none"
                 style="color: #ffff00; font-size: 19px; --outline-color: #000000;">
             ဒီနေရာမှာ စာတန်းထိုး ပေါ်မယ်
           </span>
-          <!-- Right Resize Handle Dot -->
           <div id="captionResizeDot" class="w-4 h-4 rounded-full bg-white border-2 border-blue-500 absolute right-1.5 top-1/2 -translate-y-1/2 shadow cursor-ew-resize"></div>
         </div>
       </div>
 
-      <!-- Video Seekbar Control -->
       <div class="mt-2 bg-slate-500/90 text-white rounded-full px-4 py-2 flex items-center gap-3 shadow-sm">
         <button onclick="togglePlayVideo()" id="playPauseBtn" class="text-white focus:outline-none">
           <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -200,11 +183,9 @@
 
       <!-- ==================== TAB 1: VIDEO ==================== -->
       <div id="tab-video" class="space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <!-- Mode -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Mode</label>
           <div class="grid grid-cols-3 gap-2 mt-1.5">
-            <!-- AI Recap -->
             <div onclick="selectMode('AI Recap')" id="modeCard-AI Recap" class="cursor-pointer border-2 border-blue-500 bg-blue-50/30 rounded-2xl p-2.5">
               <div id="modeRadio-AI Recap" class="w-4 h-4 rounded-full border-2 border-blue-600 flex items-center justify-center mb-2">
                 <div class="w-2 h-2 rounded-full bg-blue-600"></div>
@@ -213,7 +194,6 @@
               <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Burmese voice + captions</div>
             </div>
 
-            <!-- Pro AI Recap -->
             <div onclick="selectMode('Pro AI Recap')" id="modeCard-Pro AI Recap" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
               <div class="flex items-center justify-between mb-2">
                 <div id="modeRadio-Pro AI Recap" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center"></div>
@@ -223,7 +203,6 @@
               <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Any language · better</div>
             </div>
 
-            <!-- Subtitle -->
             <div onclick="selectMode('Subtitle')" id="modeCard-Subtitle" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
               <div id="modeRadio-Subtitle" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center mb-2"></div>
               <div class="font-bold text-sm text-slate-900">Subtitle</div>
@@ -232,7 +211,6 @@
           </div>
         </div>
 
-        <!-- Ratio -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Ratio</label>
           <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-5 gap-1 mt-1 text-xs font-semibold">
@@ -244,7 +222,6 @@
           </div>
         </div>
 
-        <!-- Output Language -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Output language</label>
           <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
@@ -255,7 +232,6 @@
           <p class="text-[11px] text-slate-500 mt-1.5">AI Recap makes Burmese only — choose Pro AI Recap for English or Thai.</p>
         </div>
 
-        <!-- How the video fits -->
         <div>
           <label class="text-xs font-semibold text-slate-500">How the video fits</label>
           <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-2 gap-1 mt-1 text-xs font-semibold">
@@ -265,7 +241,6 @@
           <p class="text-[11px] text-slate-500 mt-1">Drag on the video to choose the area (free crop)</p>
         </div>
 
-        <!-- Video Switches -->
         <div class="space-y-2 pt-1">
           <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
             <div>
@@ -299,7 +274,6 @@
           Drag on the video to crop — press the "Crop" pill above the picture.
         </div>
 
-        <!-- Zoom Slider -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Zoom</span>
@@ -312,7 +286,6 @@
           </div>
         </div>
 
-        <!-- Source Language -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Source language</label>
           <select id="sourceLangSelect" onchange="state.source_language=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800">
@@ -333,7 +306,6 @@
           <span id="voiceCountLabel">2 မြန်မာ voices</span>
         </div>
 
-        <!-- Selected Voice Card -->
         <div class="border border-blue-200 bg-blue-50/20 rounded-2xl p-3 flex items-center justify-between">
           <div onclick="toggleVoiceDropdown()" class="flex items-center gap-3 cursor-pointer flex-1">
             <div id="selectedVoiceAvatar" class="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-sm">T</div>
@@ -350,7 +322,6 @@
           </div>
         </div>
 
-        <!-- Expandable Voice Picker List -->
         <div id="voicePickerBox" class="border border-slate-200 rounded-2xl p-3 space-y-3">
           <div class="flex gap-2">
             <input id="voiceSearchInput" type="text" placeholder="Search voices..." oninput="renderVoiceList()" class="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-slate-50" />
@@ -364,7 +335,6 @@
           <div id="voiceListContainer" class="space-y-1.5"></div>
         </div>
 
-        <!-- Speed Slider -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Speed</span>
@@ -377,7 +347,6 @@
           </div>
         </div>
 
-        <!-- Pitch Slider -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Pitch</span>
@@ -393,7 +362,6 @@
 
       <!-- ==================== TAB 3: CAPTIONS ==================== -->
       <div id="tab-captions" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <!-- Blur Boxes -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <div>
             <div id="blurCountTitle" class="text-sm font-bold text-slate-800">0 blur box(es)</div>
@@ -402,7 +370,6 @@
           <button onclick="addBlurBox()" class="px-3.5 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl hover:bg-blue-100">+ Add</button>
         </div>
 
-        <!-- Full Band Cover -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <div class="text-sm font-bold text-slate-800">Full band (cover original subtitles)</div>
           <label class="ios-switch">
@@ -411,7 +378,6 @@
           </label>
         </div>
 
-        <!-- Captions On/Off -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <div class="text-sm font-bold text-slate-800">Captions</div>
           <label class="ios-switch">
@@ -420,17 +386,15 @@
           </label>
         </div>
 
-        <!-- Font Selector -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Font</label>
           <select onchange="state.font=this.value" class="mt-1 w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold">
+            <option value="Padauk">Padauk Bold (Recommended)</option>
+            <option value="Noto Sans Myanmar">Noto Sans Myanmar</option>
             <option value="A13 WenYoe">A13 WenYoe</option>
-            <option value="Padauk">Padauk Bold</option>
-            <option value="Pyidaungsu">Pyidaungsu</option>
           </select>
         </div>
 
-        <!-- Text Size -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Text size</span>
@@ -443,7 +407,6 @@
           </div>
         </div>
 
-        <!-- Text Colour Swatches -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Text colour</label>
           <div class="flex items-center gap-3 mt-2">
@@ -459,13 +422,11 @@
           </div>
         </div>
 
-        <!-- Outline Colour -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <span class="text-sm font-bold text-slate-800">Outline colour</span>
           <input type="color" value="#000000" onchange="setOutlineColor(this.value)" class="w-10 h-7 rounded cursor-pointer border border-slate-300 bg-black" />
         </div>
 
-        <!-- Outline Width -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Outline width</span>
@@ -478,7 +439,6 @@
           </div>
         </div>
 
-        <!-- Bold & Box (background) -->
         <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
           <span class="text-sm font-bold text-slate-800">Bold</span>
           <label class="ios-switch">
@@ -495,7 +455,6 @@
           </label>
         </div>
 
-        <!-- Position Presets -->
         <div>
           <label class="text-xs font-semibold text-slate-500">Position</label>
           <div class="bg-slate-100 p-1 rounded-xl grid grid-cols-3 gap-1 mt-1 text-xs font-semibold">
@@ -505,7 +464,6 @@
           </div>
         </div>
 
-        <!-- Vertical Position Slider -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Vertical position</span>
@@ -518,7 +476,6 @@
           </div>
         </div>
 
-        <!-- Words per caption -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Words per caption</span>
@@ -532,7 +489,6 @@
           <p class="text-[11px] text-amber-700 font-medium mt-1">Cannot be changed after the video is made — set it now</p>
         </div>
 
-        <!-- Caption Width -->
         <div>
           <div class="flex justify-between text-sm font-bold mb-1.5">
             <span>Caption width</span>
@@ -548,7 +504,6 @@
 
       <!-- ==================== TAB 4: EXTRAS ==================== -->
       <div id="tab-extras" class="hidden space-y-3.5 bg-white p-3.5 rounded-2xl shadow-sm border border-slate-100">
-        <!-- Watermark Text Card -->
         <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
           <div class="flex items-center justify-between">
             <span class="text-sm font-bold text-slate-800">Watermark text</span>
@@ -596,19 +551,9 @@
                 <span class="ios-slider"></span>
               </label>
             </div>
-
-            <!-- 3-Position Quick Dots -->
-            <div class="flex justify-end">
-              <div class="inline-grid grid-cols-3 gap-1.5 bg-white p-1.5 rounded-xl border border-slate-200">
-                <button onclick="setWatermarkSide('left')" class="w-6 h-6 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">•</button>
-                <button onclick="setWatermarkSide('center')" class="w-6 h-6 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">•</button>
-                <button onclick="setWatermarkSide('right')" class="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold">•</button>
-              </div>
-            </div>
           </div>
         </div>
 
-        <!-- Logo (round) -->
         <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
           <div class="flex items-center justify-between">
             <div>
@@ -625,7 +570,6 @@
           </div>
         </div>
 
-        <!-- AI caption + hashtags -->
         <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
           <div class="flex items-center justify-between">
             <div>
@@ -667,43 +611,38 @@
 
   </div>
 
-  <!-- ================= 6. "OWN KEY" MODAL (13.11.2026 FREE API MODELS) ================= -->
+  <!-- ================= 6. "OWN KEY" MODAL (GROQ WHISPER + GEMINI API) ================= -->
   <div id="keyModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
     <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="font-bold text-base text-slate-900">Own API Keys (2026 Free Tier)</h3>
-          <p class="text-[11px] text-slate-500">Free API Key များဖြင့် တစ်နေ့ ၁၀ ပုဒ်+ အခမဲ့ ထုတ်နိုင်သည်</p>
+          <h3 class="font-bold text-base text-slate-900">Own API Keys (Groq + Gemini)</h3>
+          <p class="text-[11px] text-slate-500">Groq Whisper + Gemini Native JSON စနစ်</p>
         </div>
         <button onclick="closeKeyModal()" class="text-slate-400 hover:text-slate-600 text-lg font-bold">✕</button>
       </div>
 
       <div class="space-y-3 text-xs">
         <div>
-          <label class="font-bold text-slate-700 block mb-1">AssemblyAI API Key (Free 185 Hours)</label>
-          <input id="inputAssemblyKey" type="password" placeholder="AssemblyAI API Key ထည့်ပါ..."
+          <label class="font-bold text-slate-700 block mb-1">Groq API Key (Whisper Large V3 Turbo)</label>
+          <input id="inputGroqKey" type="password" placeholder="gsk_..."
                  class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-blue-500" />
         </div>
 
         <div>
-          <label class="font-bold text-slate-700 block mb-1">OpenRouter API Key (Free 50 Req/Day)</label>
-          <input id="inputOpenRouterKey" type="password" placeholder="sk-or-v1-..."
+          <label class="font-bold text-slate-700 block mb-1">Google Gemini API Key</label>
+          <input id="inputGeminiKey" type="password" placeholder="AIzaSy..."
                  class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-blue-500" />
         </div>
 
         <div>
-          <label class="font-bold text-slate-700 block mb-1">OpenRouter Free Model (13.11.2026)</label>
-          <select id="inputOpenRouterModel" class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 font-semibold text-slate-800">
-            <option value="google/gemma-4-31b-it:free">Gemma 4 31B (:free) - မြန်မာစာ အကောင်းဆုံး</option>
-            <option value="qwen/qwen3.8-27b:free">Qwen 3.8 27B (:free) - တရုတ်ကား Recap အထူးကောင်း</option>
-            <option value="google/gemma-4-26b-a4b-it:free">Gemma 4 26B MoE (:free) - အမြန်ဆုံး</option>
-            <option value="nvidia/nemotron-3-ultra-550b-a55b:free">Nemotron 3 Ultra 550B (:free) - 1M Context</option>
-            <option value="nvidia/nemotron-3.5-lightning:free">Nemotron 3.5 Lightning (:free) - 1M Fast</option>
-            <option value="openrouter/free">openrouter/free (Auto Free Router)</option>
+          <label class="font-bold text-slate-700 block mb-1">Gemini Model (Nov 2026 Active)</label>
+          <select id="inputGeminiModel" class="w-full p-2.5 border border-slate-200 rounded-xl bg-slate-50 font-semibold text-slate-800">
+            <option value="gemini-3.8-flash">gemini-3.8-flash (အသစ်ဆုံး · မြန်မာစာ အကောင်းဆုံး)</option>
+            <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (2.5-flash အစားထိုး · အမြန်ဆုံး)</option>
+            <option value="gemini-3.6-flash">gemini-3.6-flash (Stable Flash)</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Legacy Lite)</option>
           </select>
-          <p class="text-[11px] text-emerald-600 font-medium mt-1">
-            ✓ Model တစ်ခု Busy ဖြစ်ပါက နောက် Free Model သို့ အလိုအလျောက် ပြောင်းပေးပါသည်
-          </p>
         </div>
       </div>
 
@@ -717,33 +656,28 @@
   <!-- ================= 7. 7-STEP RENDER PROGRESS MODAL ================= -->
   <div id="progressModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
     <div class="bg-[#f8fafc] w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-slate-100 space-y-4">
-      <!-- Top Title & Percentage -->
       <div class="flex items-start justify-between">
         <div class="flex items-center gap-3 min-w-0">
           <div id="topSpinner" class="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
           <div class="min-w-0">
             <div id="progStepTitle" class="font-extrabold text-lg text-slate-900 leading-tight">Render video</div>
-            <div id="progSubMeta" class="text-xs text-slate-500 truncate">1000083848.mp4 · AI Recap · Or...</div>
+            <div id="progSubMeta" class="text-xs text-slate-500 truncate">1000083848.mp4 · AI Recap</div>
           </div>
         </div>
         <div id="progPercentText" class="text-3xl font-extrabold text-blue-600">0%</div>
       </div>
 
-      <!-- Progress Bar -->
       <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
         <div id="progBarFill" class="h-full bg-blue-600 rounded-full transition-all duration-500" style="width: 5%"></div>
       </div>
 
-      <!-- Elapsed & Left -->
       <div class="flex justify-between text-xs font-medium text-slate-500">
         <span id="progElapsed">Elapsed 0:00</span>
         <span id="progEta">About --:-- left</span>
       </div>
 
-      <!-- 7 Steps Checklist -->
       <div id="stepListContainer" class="space-y-2 pt-1 text-sm font-semibold"></div>
 
-      <!-- Completed Download & AI Caption Box -->
       <div id="completedActions" class="hidden pt-3 space-y-3 border-t border-slate-200">
         <div id="aiCaptionResultBox" class="hidden p-2.5 bg-slate-100 rounded-xl text-xs text-slate-700 whitespace-pre-wrap"></div>
         <div class="flex gap-2">
@@ -799,7 +733,7 @@
       blur_boxes: 0,
       full_band: false,
       captions_on: true,
-      font: "A13 WenYoe",
+      font: "Padauk",
       text_size: 30,
       text_color: "#FFFF00",
       outline_color: "#000000",
@@ -817,9 +751,9 @@
       ai_hashtags: true,
       default_hashtags: "#shortdramareview #myanmartiktok🇲🇲 #ဘာသာပြန်ဇာတ်လမ်းများ",
       add_fyp: true,
-      assemblyai_key: localStorage.getItem("aai_key") || "",
-      openrouter_key: localStorage.getItem("or_key") || "",
-      openrouter_model: localStorage.getItem("or_model") || "google/gemma-4-31b-it:free"
+      groq_key: localStorage.getItem("groq_key") || "",
+      gemini_key: localStorage.getItem("gemini_key") || "",
+      gemini_model: localStorage.getItem("gemini_model") || "gemini-2.5-flash"
     };
 
     window.addEventListener("DOMContentLoaded", () => {
@@ -829,7 +763,6 @@
       updateSummary();
     });
 
-    // Tab Navigation
     function switchTab(tab) {
       ["video", "voice", "captions", "extras"].forEach(t => {
         document.getElementById(`tab-${t}`).classList.toggle("hidden", t !== tab);
@@ -840,7 +773,6 @@
       });
     }
 
-    // Video Selection & Player Controls
     function handleVideoSelect(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -893,7 +825,6 @@
       return `${m}:${s < 10 ? "0" : ""}${s}`;
     }
 
-    // Video Tab Functions
     function selectMode(m) {
       state.mode = m;
       ["AI Recap", "Pro AI Recap", "Subtitle"].forEach(item => {
@@ -949,7 +880,6 @@
       document.getElementById("zoomValText").innerText = `${val}%`;
     }
 
-    // Voice Tab Functions
     function setGenderFilter(g) {
       genderFilter = g;
       ["All", "Male", "Female"].forEach(k => {
@@ -1020,7 +950,6 @@
       document.getElementById("pitchValText").innerText = `${val >= 0 ? '+' : ''}${val}Hz`;
     }
 
-    // Captions & Blur Functions
     function addBlurBox() {
       state.blur_boxes += 1;
       document.getElementById("blurCountTitle").innerText = `${state.blur_boxes} blur box(es)`;
@@ -1028,23 +957,8 @@
       const box = document.createElement("div");
       box.className = "absolute left-[15%] bottom-[12%] w-[70%] h-[14%] backdrop-blur-md bg-white/20 border border-dashed border-amber-300 rounded-lg pointer-events-auto cursor-move flex items-center justify-center text-[10px] text-white/80";
       box.innerText = "Blur Box";
-      makeElementDraggable(box);
       layer.appendChild(box);
       updateSummary();
-    }
-
-    function makeElementDraggable(el) {
-      const stage = document.getElementById("videoStage");
-      let isDrag = false;
-      el.addEventListener("pointerdown", e => { isDrag = true; el.setPointerCapture(e.pointerId); });
-      el.addEventListener("pointermove", e => {
-        if (!isDrag) return;
-        const rect = stage.getBoundingClientRect();
-        const topPct = Math.max(0, Math.min(85, ((e.clientY - rect.top) / rect.height) * 100));
-        el.style.top = `${topPct}%`;
-        el.style.bottom = "auto";
-      });
-      el.addEventListener("pointerup", () => { isDrag = false; });
     }
 
     function toggleFullBand(checked) {
@@ -1104,12 +1018,11 @@
       document.getElementById("captionBox").style.width = `${val}%`;
     }
 
-    // Drag to Move & Right-Dot Resize on Video Caption Preview
     function initCaptionInteractions() {
       const box = document.getElementById("captionBox");
       const dot = document.getElementById("captionResizeDot");
       const stage = document.getElementById("videoStage");
-      let mode = null; // "drag" or "resize"
+      let mode = null;
 
       dot.addEventListener("pointerdown", e => {
         e.stopPropagation();
@@ -1145,7 +1058,6 @@
       window.addEventListener("pointerup", () => { mode = null; });
     }
 
-    // Extras Functions
     function toggleWatermark(checked) {
       state.watermark_on = checked;
       document.getElementById("watermarkControls").classList.toggle("hidden", !checked);
@@ -1157,14 +1069,6 @@
       document.getElementById("watermarkPreview").innerText = val;
     }
 
-    function setWatermarkSide(side) {
-      const wm = document.getElementById("watermarkPreview");
-      wm.style.left = side === "left" ? "16px" : side === "center" ? "50%" : "auto";
-      wm.style.right = side === "right" ? "16px" : "auto";
-      wm.style.transform = side === "center" ? "translateX(-50%)" : "none";
-    }
-
-    // Slider Helper
     function adjustSlider(id, delta) {
       const el = document.getElementById(id);
       el.value = Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), parseFloat(el.value) + delta));
@@ -1178,11 +1082,11 @@
       document.getElementById("summaryBottomLine").innerText = `${ratioTxt} · Blur ${state.blur_boxes} · ${capTxt} · ${state.output_language}`;
     }
 
-    // Own Key Modal
+    // Own Key Modal (Groq + Gemini)
     function openKeyModal() {
-      document.getElementById("inputAssemblyKey").value = state.assemblyai_key;
-      document.getElementById("inputOpenRouterKey").value = state.openrouter_key;
-      document.getElementById("inputOpenRouterModel").value = state.openrouter_model;
+      document.getElementById("inputGroqKey").value = state.groq_key;
+      document.getElementById("inputGeminiKey").value = state.gemini_key;
+      document.getElementById("inputGeminiModel").value = state.gemini_model;
       document.getElementById("keyModal").classList.remove("hidden");
     }
 
@@ -1191,22 +1095,21 @@
     }
 
     function saveApiKeys() {
-      state.assemblyai_key = document.getElementById("inputAssemblyKey").value.trim();
-      state.openrouter_key = document.getElementById("inputOpenRouterKey").value.trim();
-      state.openrouter_model = document.getElementById("inputOpenRouterModel").value;
-      localStorage.setItem("aai_key", state.assemblyai_key);
-      localStorage.setItem("or_key", state.openrouter_key);
-      localStorage.setItem("or_model", state.openrouter_model);
+      state.groq_key = document.getElementById("inputGroqKey").value.trim();
+      state.gemini_key = document.getElementById("inputGeminiKey").value.trim();
+      state.gemini_model = document.getElementById("inputGeminiModel").value;
+      localStorage.setItem("groq_key", state.groq_key);
+      localStorage.setItem("gemini_key", state.gemini_key);
+      localStorage.setItem("gemini_model", state.gemini_model);
       closeKeyModal();
     }
 
-    // Start Recap Pipeline & Poll 7-Step Progress
     async function startRecapJob() {
       if (!selectedVideoFile) {
         alert("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင်အရင် ရွေးချယ်ပေးပါ (Video ပေါ်ရှိ + ခလုတ်ကိုနှိပ်ပါ)");
         return;
       }
-      if (!state.assemblyai_key || !state.openrouter_key) {
+      if (!state.groq_key || !state.gemini_key) {
         openKeyModal();
         return;
       }
