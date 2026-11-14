@@ -16,23 +16,24 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (Exact Pro Sync Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (Groq Whisper + Gemini Edition)")
 
+# Render Paid Plan Persistent Disk လမ်းကြောင်း (/var/data/recap_jobs)
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
-DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
-FREE_MODEL_FALLBACKS = [
-    "google/gemma-4-31b-it:free",
-    "qwen/qwen3.8-27b:free",
-    "google/gemma-4-26b-a4b-it:free",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "nvidia/nemotron-3.5-lightning:free",
-    "openrouter/free",
+# 2026 နိုဝင်ဘာလ လက်ရှိ အလုပ်လုပ်နေသော တရားဝင် Gemini Models စာရင်း
+GEMINI_FALLBACK_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash-lite",
 ]
+
 
 VOICE_MAP = {
     "Thiha": "my-MM-ThihaNeural",
@@ -47,9 +48,10 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 # -------------------------------------------------------------------------
-# 1. MYANMAR UNICODE CLEANER & SHORT SINGLE-LINE CAPTION SPLITTER
+# 1. MYANMAR UNICODE CLEANER & SINGLE-LINE SHORT PHRASE SPLITTER
 # -------------------------------------------------------------------------
 def clean_burmese_text(text: str) -> str:
+    """မြန်မာစာသားများကို သန့်စင်ပြီး သရအစီအစဉ်မှား၍ [] ပေါ်ခြင်းကို ကာကွယ်ခြင်း"""
     if not text:
         return ""
     text = unicodedata.normalize("NFC", str(text))
@@ -62,7 +64,6 @@ def clean_burmese_text(text: str) -> str:
     for ch in ["\u200b", "\u200c", "\u200d", "\ufeff", "*", "#", "_", "`", "~", '"', "'"]:
         text = text.replace(ch, "")
 
-    # Fix vowel ordering without regex \u escape issues
     text = text.replace("\u1036\u102f", "\u102f\u1036")
     text = text.replace("\u1036\u1030", "\u1030\u1036")
     text = text.replace("\u1037\u103a", "\u103a\u1037")
@@ -71,17 +72,14 @@ def clean_burmese_text(text: str) -> str:
 
 def split_into_short_phrases(text: str, words_per_caption: int = 9) -> List[str]:
     """
-    video_1.mp4 ကဲ့သို့ စာတန်းထိုး တစ်ခါပေါ်လျှင် တစ်ကြောင်းတည်း အနေတော် (၁၄ မှ ၂၂ လုံးခန့်)
+    စာတန်းထိုး တစ်ခါပေါ်လျှင် တစ်ကြောင်းတည်း အနေတော် (၁၄ မှ ၂၂ လုံးခန့်)
     သပ်သပ်ရပ်ရပ် ပေါ်စေရန် ပုဒ်ဖြတ် (၊ ။) နှင့် Space အလိုက် ပိုင်းဖြတ်ပေးခြင်း
     """
     text = clean_burmese_text(text)
     if not text:
         return [""]
 
-    # တစ်ကြောင်းတည်း လှပစွာ ပေါ်စေရန် အများဆုံး စာလုံးရေ ~22 လုံး
-    max_chars = max(14, min(26, int(words_per_caption) * 2 + 4))
-
-    # ပထမအဆင့် - ပုဒ်ဖြတ် (၊) နှင့် ပုဒ်မ (။) များဖြင့် အရင်ခွဲသည်
+    max_chars = max(14, min(25, int(words_per_caption) * 2 + 4))
     clauses = re.split(r"(?<=[၊။])\s*", text)
     phrases: List[str] = []
 
@@ -93,7 +91,6 @@ def split_into_short_phrases(text: str, words_per_caption: int = 9) -> List[str]
             phrases.append(clause)
             continue
 
-        # Clause က ရှည်နေပါက Space ခြားထားသော စကားလုံးများအလိုက် ထပ်ပိုင်းသည်
         words = clause.split(" ")
         cur = ""
         for w in words:
@@ -119,12 +116,12 @@ def split_into_short_phrases(text: str, words_per_caption: int = 9) -> List[str]
 
 
 # -------------------------------------------------------------------------
-# 2. FFMPEG HELPERS
+# 2. FFMPEG & SYSTEM HELPERS
 # -------------------------------------------------------------------------
 def run_cmd(cmd: List[str]) -> str:
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{proc.stderr[-1000:]}")
+        raise RuntimeError(f"FFmpeg Error: {proc.stderr[-800:]}")
     return proc.stdout
 
 
@@ -203,155 +200,90 @@ def update_job_step(job_id: str, step_name: str, progress: int):
 
 
 # -------------------------------------------------------------------------
-# 3. STEP 2 & 3: ASSEMBLYAI TRANSCRIBE (UTTERANCE-LEVEL SYNC)
+# 3. STEP 2 & 3: GROQ WHISPER-LARGE-V3-TURBO TRANSCRIPTION
 # -------------------------------------------------------------------------
-async def request_assemblyai_transcript(
-    client: httpx.AsyncClient,
-    headers: Dict[str, str],
-    upload_url: str,
-    lang_code: Optional[str],
-) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "audio_url": upload_url,
-        "speech_models": ["universal-3-5-pro", "universal-2"],
-    }
-    if lang_code:
-        payload["language_code"] = lang_code
-    else:
-        payload["language_detection"] = True
-        payload["language_detection_options"] = {
-            "expected_languages": ["zh", "en", "th", "ko", "ja", "vi"]
-        }
-
-    tr_res = await client.post(
-        "https://api.assemblyai.com/v2/transcript", headers=headers, json=payload
-    )
-    if tr_res.status_code != 200:
-        raise RuntimeError(f"AssemblyAI Transcript Error: {tr_res.text}")
-    transcript_id = tr_res.json()["id"]
-
-    while True:
-        st_res = await client.get(
-            f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers
-        )
-        data = st_res.json()
-        status = data.get("status")
-        if status == "completed":
-            return data
-        elif status == "error":
-            raise RuntimeError(f"AssemblyAI Failed: {data.get('error')}")
-        await asyncio.sleep(3)
-
-
-async def assemblyai_upload_and_transcribe(
-    audio_path: Path, api_key: str, source_lang: str, job_id: str, total_video_dur: float
+async def groq_whisper_transcribe(
+    audio_path: Path, groq_key: str, source_lang: str, job_id: str, total_video_dur: float
 ) -> List[Dict[str, Any]]:
-    headers = {"authorization": api_key.strip()}
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        update_job_step(job_id, "upload", 15)
+    """
+    Groq Whisper Large V3 Turbo သုံးပြီး အသံဖိုင်ကို စက္ကန့်ပိုင်းအတွင်း
+    Segment Timestamps အတိအကျဖြင့် ဖမ်းယူခြင်း
+    """
+    update_job_step(job_id, "upload", 18)
+    headers = {"Authorization": f"Bearer {groq_key.strip()}"}
+
+    data_fields: Dict[str, Any] = {
+        "model": "whisper-large-v3-turbo",
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "segment",
+        "temperature": "0.0",
+    }
+    if source_lang and source_lang != "Auto-detect":
+        data_fields["language"] = source_lang
+
+    update_job_step(job_id, "transcribe", 28)
+    async with httpx.AsyncClient(timeout=180.0) as client:
         with open(audio_path, "rb") as f:
-            up_res = await client.post(
-                "https://api.assemblyai.com/v2/upload", headers=headers, content=f.read()
-            )
-        if up_res.status_code != 200:
-            raise RuntimeError(f"AssemblyAI Upload Error: {up_res.text}")
-        upload_url = up_res.json()["upload_url"]
-
-        update_job_step(job_id, "transcribe", 25)
-        chosen_lang = None if (source_lang == "Auto-detect" or not source_lang) else source_lang
-
-        try:
-            data = await request_assemblyai_transcript(client, headers, upload_url, chosen_lang)
-            detected = data.get("language_code", "")
-            conf = float(data.get("language_confidence") or 1.0)
-            # နောက်ခံတီးလုံးကြောင့် တရုတ်ကားကို English လို့ မှားဖမ်းမိပါက Chinese (zh) ဖြင့် ပြန်ဖမ်းသည်
-            if chosen_lang is None and detected == "en" and conf < 0.85:
-                data = await request_assemblyai_transcript(client, headers, upload_url, "zh")
-        except Exception:
-            data = await request_assemblyai_transcript(client, headers, upload_url, "zh")
-
-        transcript_id = data["id"]
-
-        # Sentences endpoint ကို အရင်ယူသည်
-        sent_res = await client.get(
-            f"https://api.assemblyai.com/v2/transcript/{transcript_id}/sentences",
+            files = {"file": (audio_path.name, f.read(), "audio/mpeg")}
+        res = await client.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
             headers=headers,
+            data=data_fields,
+            files=files,
         )
-        raw_sentences = sent_res.json().get("sentences", []) if sent_res.status_code == 200 else []
+        if res.status_code != 200:
+            raise RuntimeError(f"Groq Whisper Error ({res.status_code}): {res.text}")
+        res_json = res.json()
 
-        # တရုတ်စာတွင် sentences က အရမ်းရှည်နေပါက words မှ အသံရပ်ချိန် (pause > 0.45s) သို့မဟုတ် ပုဒ်ဖြတ်အလိုက် ခွဲထုတ်သည်
-        words = data.get("words") or []
-        if words:
-            utterances: List[Dict[str, Any]] = []
-            cur_w: List[str] = []
-            seg_st = words[0]["start"]
-            prev_end = words[0]["end"]
+    raw_segments = res_json.get("segments") or []
+    cleaned_segments: List[Dict[str, Any]] = []
 
-            for w in words:
-                gap = w["start"] - prev_end
-                dur = prev_end - seg_st
-                # အသံ 0.45s ခြားသွားလျှင် သို့မဟုတ် 6 စက္ကန့်ပြည့်ပြီး ပုဒ်ဖြတ်ပါလျှင် စာကြောင်းတစ်ကြောင်းအဖြစ် ဖြတ်သည်
-                if cur_w and (
-                    (gap >= 450 and dur >= 1500)
-                    or (dur >= 5500 and w["text"].endswith(("。", "！", "？", "，", ".", "!", "?")))
-                    or dur >= 9000
-                ):
-                    utterances.append({
-                        "text": "".join(cur_w) if data.get("language_code", "").startswith("zh") else " ".join(cur_w),
-                        "start": seg_st,
-                        "end": prev_end,
-                    })
-                    cur_w = []
-                    seg_st = w["start"]
+    # နောက်ခံတီးလုံးသက်သက်ဖြစ်သော အပိုင်းများနှင့် စာသားအလွတ်များကို စစ်ထုတ်ခြင်း
+    hallucination_words = {"字幕", "谢谢观看", "Subtitles", "Thank you for watching", "Amara.org"}
+    for seg in raw_segments:
+        txt = (seg.get("text") or "").strip()
+        if not txt or any(hw in txt for hw in hallucination_words):
+            continue
+        if float(seg.get("no_speech_prob", 0.0)) > 0.88:
+            continue
+        st = max(0.0, float(seg.get("start", 0.0)))
+        en = min(total_video_dur, max(st + 0.5, float(seg.get("end", st + 2.0))))
+        cleaned_segments.append({"start": st, "end": en, "text": txt})
 
-                cur_w.append(w["text"])
-                prev_end = w["end"]
+    # အရမ်းတိုနေသော စာကြောင်းလေးများ (< 2.2s) ကို ကပ်လျက်စာကြောင်းနှင့် ပေါင်းစပ်ပေးခြင်းဖြင့်
+    # မြန်မာလို အသံထုတ်ရာတွင် အရုပ်နှင့်အသံ အချိန်ကိုက် ပိုမိုချောမွေ့စေသည်
+    merged: List[Dict[str, Any]] = []
+    for seg in cleaned_segments:
+        if not merged:
+            merged.append(seg)
+            continue
+        prev = merged[-1]
+        gap = seg["start"] - prev["end"]
+        combined_dur = seg["end"] - prev["start"]
+        if gap < 0.35 and (prev["end"] - prev["start"] < 2.2 or combined_dur <= 5.5):
+            prev["end"] = seg["end"]
+            prev["text"] = f"{prev['text']} {seg['text']}".strip()
+        else:
+            merged.append(seg)
 
-            if cur_w:
-                utterances.append({
-                    "text": "".join(cur_w) if data.get("language_code", "").startswith("zh") else " ".join(cur_w),
-                    "start": seg_st,
-                    "end": prev_end,
-                })
-            if utterances:
-                return utterances
+    if not merged:
+        merged = [{"start": 0.0, "end": min(10.0, total_video_dur), "text": res_json.get("text", "...")}]
 
-        if raw_sentences:
-            return raw_sentences
+    for i, m in enumerate(merged):
+        m["index"] = i
+        m["start"] = round(m["start"], 2)
+        m["end"] = round(m["end"], 2)
 
-        return [{
-            "text": data.get("text") or "",
-            "start": 0,
-            "end": int(total_video_dur * 1000),
-        }]
+    return merged
 
 
 # -------------------------------------------------------------------------
-# 4. STEP 4: OPENROUTER SENTENCE-BY-SENTENCE NATURAL BURMESE TRANSLATION
+# 4. STEP 4: GEMINI API NATIVE JSON TRANSLATION / RECAP
 # -------------------------------------------------------------------------
-def parse_ai_json_response(raw_content: str) -> Dict[str, Any]:
-    cleaned_raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", " ", raw_content)
-    json_match = re.search(r"\{.*\}", cleaned_raw, flags=re.DOTALL)
-    json_str = json_match.group(0) if json_match else cleaned_raw.strip()
-
-    try:
-        return json.loads(json_str, strict=False)
-    except Exception:
-        fallback_segs = []
-        pattern = r'"index"\s*:\s*(\d+)\s*,\s*"narration"\s*:\s*"([^"]+)"'
-        for m in re.finditer(pattern, cleaned_raw):
-            fallback_segs.append({"index": int(m.group(1)), "narration": m.group(2)})
-        cap_match = re.search(r'"tiktok_caption"\s*:\s*"([^"]+)"', cleaned_raw)
-        return {
-            "segments": fallback_segs,
-            "tiktok_caption": cap_match.group(1) if cap_match else "",
-        }
-
-
-async def openrouter_generate_recap(
-    sentences: List[Dict[str, Any]],
-    api_key: str,
-    model: str,
+async def gemini_generate_recap(
+    segments: List[Dict[str, Any]],
+    gemini_key: str,
+    gemini_model: str,
     mode: str,
     output_lang: str,
     want_hashtags: bool,
@@ -359,26 +291,22 @@ async def openrouter_generate_recap(
     add_fyp: bool,
 ) -> Dict[str, Any]:
     """
-    video_1.mp4 ကဲ့သို့ စာကြောင်းတစ်ကြောင်းချင်းစီကို မူရင်းအဓိပ္ပာယ်မပျက်၊
-    သဘာဝကျသော မြန်မာစကားပြော (Spoken Burmese Dub/Recap style) ဖြင့် တိကျစွာ ဘာသာပြန်ခြင်း
+    Google Gemini API ၏ Native JSON Schema Mode ကို သုံး၍
+    စာကြောင်းတစ်ကြောင်းချင်းစီကို သဘာဝကျသော မြန်မာစကားပြောအဖြစ် တိကျစွာ ပြောင်းလဲခြင်း
     """
-    segments = []
-    for idx, s in enumerate(sentences):
-        st = round(s["start"] / 1000.0, 2)
-        en = round(max(st + 0.8, s["end"] / 1000.0), 2)
-        segments.append({
-            "index": idx,
-            "start": st,
-            "end": en,
-            "text": s["text"],
-        })
+    lang_map = {
+        "မြန်မာ": "natural, engaging SPOKEN BURMESE (မြန်မာစကားပြောဟန်)",
+        "English": "natural, engaging spoken English",
+        "ไทย": "natural, engaging spoken Thai (ภาษาไทย)",
+    }
+    target_lang_desc = lang_map.get(output_lang, lang_map["မြန်မာ"])
 
-    system_prompt = """You are an expert Burmese translator and voiceover scriptwriter for Chinese Donghua (Xianxia/Cultivation) and dramas.
-Translate each input sentence directly and accurately into natural, punchy SPOKEN BURMESE (မြန်မာစကားပြောဟန်) that matches the exact meaning and emotion of the character/narrator.
+    system_instruction = f"""You are an expert translator and voiceover scriptwriter for Chinese Donghua (Xianxia/Cultivation) and short dramas.
+Translate each input segment directly and accurately into {target_lang_desc} so that it matches the exact meaning, emotion, and timing of the scene.
 
-STRICT RULES:
-1. DIRECT SPOKEN TRANSLATION: Translate sentence-by-sentence naturally (e.g., "ရှောင်ဟွာ မင်းဘာလုပ်နေတာလဲ။", "သန့်ရှင်းသူမလေး ရောက်လာပြီ။", "ရောက်လာတော့လည်း ဘာဖြစ်လဲ။", "ပြောပြီးပြီလား။").
-2. NATURAL SPOKEN ENDINGS: Use natural spoken particles ("တယ်", "လဲ", "ပြီ", "တာပေါ့", "ပါတယ်", "လား", "နော်"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
+STRICT BURMESE RULES:
+1. DIRECT SPOKEN STYLE: Translate each segment naturally as spoken Burmese dialogue/narration (e.g., "ရှောင်ဟွာ မင်းဘာလုပ်နေတာလဲ။", "သန့်ရှင်းသူမလေး ရောက်လာပြီ။", "ရောက်လာတော့လည်း ဘာဖြစ်လဲ။", "ပြောပြီးပြီလား။ မင်းလို အသုံးမကျတဲ့ကောင်က ငါ့ကို ရိုက်ရဲတယ်ပေါ့။").
+2. NATURAL SPOKEN ENDINGS: Always use spoken particles ("တယ်", "လဲ", "ပြီ", "တာပေါ့", "ပါတယ်", "လား", "နော်", "ကွ"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
 3. XIANXIA / CULTIVATION TERMINOLOGY:
    - 圣女 -> သန့်ရှင်းသူမလေး
    - 圣子 -> သန့်ရှင်းသူသား
@@ -390,59 +318,84 @@ STRICT RULES:
    - 统子 / 系统 -> တုံစီ / စနစ်
    - 灵石 -> ဝိညာဉ်ကျောက်တုံး (下品=အောက်တန်းစား, 中品=အလယ်အလတ်တန်းစား, 上品=အဆင့်မြင့်)
    - 炼气 -> လျန်ချီအဆင့်, 筑基 -> အခြေတည်အဆင့်, 元丹 / 金丹 -> ယွမ်တန်အဆင့် / ရွှေဗဟိုအဆင့်
-4. WORD SPACING FOR SUBTITLES: Put a space between Burmese phrases/words so subtitles can split cleanly, and end sentences with "။" or clauses with "၊".
-5. NO PROMPT ECHO: Output ONLY valid single-line JSON:
-{"segments": [{"index": 0, "narration": "..."}], "tiktok_caption": "..."}"""
+4. PHRASE SPACING: Put spaces between Burmese phrases and use "၊" and "။" so subtitles can break into clean single-line captions.
+5. Keep the exact same `index` for every segment."""
 
-    headers = {
-        "Authorization": f"Bearer {api_key.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://recap-app.onrender.com",
-        "X-Title": "AI Movie Recap Narrator",
+    response_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "segments": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "index": {"type": "INTEGER"},
+                        "narration": {"type": "STRING"},
+                    },
+                    "required": ["index", "narration"],
+                },
+            },
+            "tiktok_caption": {"type": "STRING"},
+        },
+        "required": ["segments", "tiktok_caption"],
     }
-    preferred = model or DEFAULT_OPENROUTER_MODEL
-    candidate_models = [preferred] + [m for m in FREE_MODEL_FALLBACKS if m != preferred]
+
+    preferred = gemini_model or DEFAULT_GEMINI_MODEL
+    models_to_try = [preferred] + [m for m in GEMINI_FALLBACK_MODELS if m != preferred]
 
     narr_map: Dict[int, str] = {}
     tiktok_cap = "ဇာတ်လမ်းကောင်းလေးကို အဆုံးထိ အားပေးကြပါဦးနော် 🎬"
-    batch_size = 30
+    batch_size = 35
 
     async with httpx.AsyncClient(timeout=240.0) as client:
         for b_start in range(0, len(segments), batch_size):
             batch = segments[b_start : b_start + batch_size]
-            payload_items = [{"index": x["index"], "text": x["text"]} for x in batch]
-            user_content = json.dumps({"segments": payload_items}, ensure_ascii=False)
-            raw_content = None
-            last_error = ""
-
-            for try_model in candidate_models:
-                body = {
-                    "model": try_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
+            prompt_payload = [
+                {
+                    "index": x["index"],
+                    "duration_sec": round(x["end"] - x["start"], 1),
+                    "text": x["text"],
                 }
-                res = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body
-                )
+                for x in batch
+            ]
+
+            body = {
+                "systemInstruction": {"parts": [{"text": system_instruction}]},
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": json.dumps({"segments": prompt_payload}, ensure_ascii=False)}],
+                    }
+                ],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "responseSchema": response_schema,
+                },
+            }
+
+
+            parsed = None
+            last_err = ""
+            for m_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key.strip()}"
+                res = await client.post(url, json=body)
                 if res.status_code == 200:
-                    res_json = res.json()
-                    if "choices" in res_json and res_json["choices"]:
-                        raw_content = res_json["choices"][0]["message"]["content"]
-                        if raw_content:
-                            break
-                last_error = f"[{try_model}] {res.status_code}: {res.text}"
-                await asyncio.sleep(2)
+                    data = res.json()
+                    try:
+                        raw_txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed = json.loads(raw_txt, strict=False)
+                        break
+                    except Exception as parse_err:
+                        last_err = str(parse_err)
+                else:
+                    last_err = f"[{m_name}] {res.status_code}: {res.text}"
+                await asyncio.sleep(1.5)
 
-            if not raw_content:
-                raise RuntimeError(f"OpenRouter Error: {last_error}")
-
-            parsed = parse_ai_json_response(raw_content)
+            if not parsed:
+                raise RuntimeError(f"Gemini API Error: {last_err}")
 
             for item in parsed.get("segments", []):
-                if "index" in item and "narration" in item:
-                    narr_map[int(item["index"])] = clean_burmese_text(item["narration"])
+                narr_map[int(item["index"])] = clean_burmese_text(item.get("narration", ""))
             if parsed.get("tiktok_caption"):
                 tiktok_cap = clean_burmese_text(parsed["tiktok_caption"])
 
@@ -469,14 +422,13 @@ def build_ass_subtitles(
     play_res_y: int,
     ass_path: Path,
 ):
-    # Custom A13WenYoe ဖောင့်ရှိပါက သုံးပြီး မရှိပါက Padauk / Noto Sans Myanmar ကို သုံးသည်
     req_font = cfg.get("font", "Padauk")
-    if Path("/usr/share/fonts/truetype/custom/A13WenYoe.ttf").exists() and req_font == "A13WenYoe":
-        font_name = "A13WenYoe"
-    elif req_font == "Padauk":
-        font_name = "Padauk"
-    else:
+    if Path("/usr/share/fonts/truetype/custom/A13WenYoe.ttf").exists() and req_font == "A13 WenYoe":
+        font_name = "A13 WenYoe"
+    elif req_font == "Noto Sans Myanmar":
         font_name = "Noto Sans Myanmar"
+    else:
+        font_name = "Padauk"
 
     font_size = int(cfg.get("text_size", 30))
     primary_col = hex_to_ass_color(cfg.get("text_color", "#FFFF00"), 0)
@@ -516,7 +468,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # -------------------------------------------------------------------------
-# 6. MAIN 7-STEP PIPELINE WORKER (EXACT VIDEO_1.MP4 TIMELINE & GAP SYNC)
+# 6. MAIN 7-STEP PIPELINE WORKER
 # -------------------------------------------------------------------------
 async def process_recap_pipeline(
     job_id: str, video_path: Path, cfg: Dict[str, Any], logo_path: Optional[Path]
@@ -525,43 +477,43 @@ async def process_recap_pipeline(
     try:
         cleanup_old_jobs()
 
-        aai_key = cfg.get("assemblyai_key") or DEFAULT_ASSEMBLYAI_KEY
-        or_key = cfg.get("openrouter_key") or DEFAULT_OPENROUTER_KEY
-        or_model = cfg.get("openrouter_model") or DEFAULT_OPENROUTER_MODEL
+        groq_key = cfg.get("groq_key") or DEFAULT_GROQ_KEY
+        gemini_key = cfg.get("gemini_key") or DEFAULT_GEMINI_KEY
+        gemini_model = cfg.get("gemini_model") or DEFAULT_GEMINI_MODEL
 
-        if not aai_key or not or_key:
-            raise RuntimeError("AssemblyAI နှင့် OpenRouter API Key များကို 'Own key' တွင် ထည့်သွင်းပေးပါ။")
+        if not groq_key or not gemini_key:
+            raise RuntimeError("Groq API Key နှင့် Gemini API Key များကို 'Own key' တွင် ထည့်သွင်းပေးပါ။")
 
         orig_w, orig_h = await asyncio.to_thread(get_video_dimensions, video_path)
         total_video_dur = await asyncio.to_thread(get_duration, video_path)
 
-        # 1. Extract audio
+        # 1. Extract audio (32kbps 16kHz Mono -> Groq 25MB limit အတွင်း ပေါ့ပါးမြန်ဆန်စွာ ပို့နိုင်ရန်)
         update_job_step(job_id, "extract_audio", 8)
         extracted_audio = job_dir / "source_audio.mp3"
         await asyncio.to_thread(
             run_cmd,
             [
                 "ffmpeg", "-y", "-i", str(video_path),
-                "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
+                "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
                 str(extracted_audio),
             ],
         )
 
-        # 2. Upload & 3. Transcribe
-        sentences = await assemblyai_upload_and_transcribe(
+        # 2. Upload & 3. Transcribe (Groq Whisper Large V3 Turbo)
+        segments = await groq_whisper_transcribe(
             extracted_audio,
-            aai_key,
+            groq_key,
             cfg.get("source_language", "Auto-detect"),
             job_id,
             total_video_dur,
         )
 
-        # 4. Translate
+        # 4. Translate (Google Gemini API)
         update_job_step(job_id, "translate", 42)
-        recap_data = await openrouter_generate_recap(
-            sentences=sentences,
-            api_key=or_key,
-            model=or_model,
+        recap_data = await gemini_generate_recap(
+            segments=segments,
+            gemini_key=gemini_key,
+            gemini_model=gemini_model,
             mode=cfg.get("mode", "AI Recap"),
             output_lang=cfg.get("output_language", "မြန်မာ"),
             want_hashtags=cfg.get("ai_hashtags", True),
@@ -571,7 +523,7 @@ async def process_recap_pipeline(
         segments = recap_data["segments"]
         JOBS[job_id]["tiktok_caption"] = recap_data["tiktok_caption"]
 
-        # 5. Voice (Edge-TTS + Leading/Trailing Silence Trim for Tight Pacing)
+        # 5. Voice (Edge-TTS + Leading/Trailing Silence Removal)
         update_job_step(job_id, "voice", 58)
         voice_short = cfg.get("voice_name", "Thiha")
         voice_id = VOICE_MAP.get(voice_short, "my-MM-ThihaNeural")
@@ -585,7 +537,6 @@ async def process_recap_pipeline(
             trim_tts = job_dir / f"tts_{seg['index']:04d}.mp3"
             comm = edge_tts.Communicate(seg["narration"], voice_id, rate=rate_str, pitch=pitch_str)
             await comm.save(str(raw_tts))
-            # Edge-TTS အသံဖိုင်၏ အစနှင့်အဆုံးရှိ အသံတိတ်နေရာပိုများကို ဖြတ်ထုတ်ပြီး 24kHz Mono တူညီအောင် ညှိသည်
             await asyncio.to_thread(
                 run_cmd,
                 [
@@ -598,7 +549,7 @@ async def process_recap_pipeline(
             seg["tts_file"] = trim_tts
             seg["tts_duration"] = max(0.35, await asyncio.to_thread(get_duration, trim_tts))
 
-        # 6. Timeline + captions (Preserving Action Gaps + Speech Sync like video_1.mp4)
+        # 6. Timeline + captions
         update_job_step(job_id, "timeline_captions", 70)
         words_per_cap = max(3, int(cfg.get("words_per_caption", 9)))
         caption_events = []
@@ -612,11 +563,10 @@ async def process_recap_pipeline(
             seg_start = max(prev_video_end, seg["start"])
             seg_end = max(seg_start + 0.4, seg["end"])
 
-            # စကားမပြောသော ကြားကာလ (Action/Silent Gap > 0.35s) ရှိပါက အခန်းမပျောက်စေရန် ထည့်သွင်းပေးခြင်း
+            # စကားမပြောသော အက်ရှင်/ကြားကာလ (Gap >= 0.4s) ကို အခန်းမပျောက်စေရန် ထည့်သွင်းခြင်း
             gap_dur = seg_start - prev_video_end
-            if gap_dur >= 0.35:
-                # Gap အရမ်းရှည်ပါက 1.45x သွက်သွက်လေး ပြပေးသည် (အမြင့်ဆုံး 3.5 စက္ကန့်)
-                target_gap_dur = min(3.5, max(0.35, gap_dur / 1.45))
+            if gap_dur >= 0.4:
+                target_gap_dur = min(3.0, max(0.35, gap_dur / 1.5))
                 gap_pts = target_gap_dur / gap_dur
                 v_gap = job_dir / f"vclip_{clip_counter:04d}_gap.mp4"
                 a_gap = job_dir / f"aclip_{clip_counter:04d}_gap.mp3"
@@ -644,7 +594,7 @@ async def process_recap_pipeline(
                 concat_a_list.append(a_gap)
                 timeline_cursor += target_gap_dur
 
-            # စကားပြောသော အပိုင်း (Speech Segment) ကို TTS အသံအရှည်နှင့် ကွက်တိချိန်ညှိခြင်း
+            # စကားပြောသော အပိုင်းကို TTS အသံအရှည်နှင့် ကွက်တိချိန်ညှိခြင်း
             orig_dur = max(0.4, seg_end - seg_start)
             tts_dur = seg["tts_duration"]
             pts_factor = tts_dur / orig_dur
@@ -665,7 +615,6 @@ async def process_recap_pipeline(
             concat_v_list.append(v_seg)
             concat_a_list.append(seg["tts_file"])
 
-            # စာကြောင်းတစ်ကြောင်းကို စကားစုတိုလေးများ (Short Single-Line Phrases) အဖြစ် ခွဲပြီး အသံနှင့် အချိန်ကိုက်ပြသခြင်း
             phrases = split_into_short_phrases(seg["narration"], words_per_cap)
             total_chars = max(1, sum(len(p) for p in phrases))
             cur_offset = 0.0
@@ -721,7 +670,7 @@ async def process_recap_pipeline(
         ass_path = job_dir / "captions.ass"
         build_ass_subtitles(caption_events, cfg, out_w, out_h, ass_path)
 
-        # 7. Render video (Mirror + Smooth Bottom Subtitle Blur + Single-Line Yellow Captions)
+        # 7. Render video
         update_job_step(job_id, "render_video", 85)
         vf_filters = []
 
@@ -752,7 +701,7 @@ async def process_recap_pipeline(
         else:
             vf_filters.append(f"scale={out_w}:{out_h}")
 
-        # video_1.mp4 အတိုင်း အောက်ခြေ မူရင်းတရုတ်စာတန်းထိုးနေရာကို ကြည်လင်သပ်ရပ်စွာ Gaussian Blur ဖုံးအုပ်ခြင်း
+        # မူရင်းတရုတ်စာတန်းထိုးနေရာကို သပ်ရပ်စွာ Gaussian Blur ဖုံးအုပ်ခြင်း
         if cfg.get("full_band", True) or int(cfg.get("blur_boxes", 0)) > 0 or cfg.get("captions_on", True):
             band_y = int(out_h * 0.81)
             band_h = max(24, out_h - band_y)
