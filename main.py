@@ -16,7 +16,7 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (Pro Server & Instant Download Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (Smooth Blur & Fast Server Edition)")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,7 +45,7 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 # -------------------------------------------------------------------------
-# ATOMIC DISK JOB STATE & LIVE LOGS (TikTok သုံးပြီး ပြန်လာလျှင်လည်း ပြန်ချိတ်နိုင်ရန်)
+# ATOMIC DISK JOB STATE & LIVE LOGS
 # -------------------------------------------------------------------------
 def save_job_state(job_id: str):
     if job_id in JOBS:
@@ -83,7 +83,7 @@ def append_job_log(job_id: str, msg: str):
 
 
 # -------------------------------------------------------------------------
-# 1. MYANMAR UNICODE CLEANER & PHRASE SPLITTER
+# 1. MYANMAR UNICODE CLEANER & PHRASE / SRT SPLITTERS
 # -------------------------------------------------------------------------
 def clean_burmese_text(text: str) -> str:
     if not text:
@@ -111,7 +111,6 @@ def split_into_short_phrases(
     if not text:
         return [""]
 
-    # စာလုံးအရွယ်အစား (text_size) ကြီးလျှင် သို့မဟုတ် Caption width ကျဉ်းလျှင် တစ်ကြောင်းစာ စာလုံးရေကို အလိုအလျောက် လျှော့ချပေးသည်
     width_factor = max(0.5, caption_width_pct / 96.0)
     size_factor = max(0.6, 32.0 / max(16, text_size))
     base_chars = int(words_per_caption) * 2 + 4
@@ -152,8 +151,54 @@ def split_into_short_phrases(
     return phrases if phrases else [text]
 
 
+def format_srt_time(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000:
+        ms = 999
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def format_srt_subtitle_lines(text: str, max_line_chars: int = 24) -> str:
+    if not text:
+        return ""
+    raw_lines = [clean_burmese_text(line).rstrip("။၊") for line in text.split("\n") if line.strip()]
+    joined = "\n".join(raw_lines)
+
+    if "\n" not in joined and len(joined) > max_line_chars and " " in joined:
+        words = joined.split(" ")
+        mid = len(joined) // 2
+        cur_len = 0
+        line1, line2 = [], []
+        for w in words:
+            if cur_len < mid or not line1:
+                line1.append(w)
+                cur_len += len(w) + 1
+            else:
+                line2.append(w)
+        if line1 and line2:
+            return f"{' '.join(line1)}\n{' '.join(line2)}"
+
+    return joined
+
+
+def build_srt_file(segments: List[Dict[str, Any]], srt_path: Path):
+    blocks = []
+    for idx, seg in enumerate(segments, start=1):
+        st = format_srt_time(seg["start"])
+        en = format_srt_time(seg["end"])
+        raw_txt = seg.get("narration") or seg.get("text", "")
+        txt = format_srt_subtitle_lines(raw_txt)
+        if txt:
+            blocks.append(f"{idx}\n{st} --> {en}\n{txt}\n")
+    srt_path.write_text("\n".join(blocks), encoding="utf-8")
+
+
 # -------------------------------------------------------------------------
-# 2. FFMPEG HELPERS
+# 2. FFMPEG HELPERS & SMOOTH GAUSSIAN BLUR BUILDER (NO DELOGO STREAKS!)
 # -------------------------------------------------------------------------
 def run_cmd(cmd: List[str]) -> str:
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -212,6 +257,47 @@ def format_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+def build_smooth_blur_filter(cfg: Dict[str, Any], out_w: int, out_h: int) -> Optional[str]:
+    """
+    delogo ကြောင့် ဒေါင်လိုက်အစင်းကြောင်းများ လှုပ်ခါနေခြင်းကို အပြီးသတ်ဖယ်ရှားပြီး
+    တည်ငြိမ်ချောမွေ့သော 2D Gaussian Blur (gblur) ဖြင့် စာတန်းထိုးနေရာကို ဖုံးအုပ်ပေးခြင်း
+    """
+    want_band = cfg.get("full_band", True)
+    blur_boxes = int(cfg.get("blur_boxes", 0))
+    if not want_band and blur_boxes <= 0:
+        return None
+
+    blur_val = max(2, min(30, int(cfg.get("band_blur", 14))))
+    sigma = round( blur_val * 1.6 + 4.0, 1 )
+
+    if want_band:
+        b_height_pct = max(5, min(45, int(cfg.get("band_height", 18))))
+        b_bottom_pct = max(0, min(45, int(cfg.get("band_from_bottom", 0))))
+        band_h = max(16, int(out_h * (b_height_pct / 100.0)))
+        band_h -= band_h % 2
+        band_y = max(0, out_h - band_h - int(out_h * (b_bottom_pct / 100.0)))
+        band_y -= band_y % 2
+        if band_y + band_h > out_h:
+            band_h = out_h - band_y
+        band_x = 0
+        band_w = out_w
+    else:
+        # Custom blur box default region
+        band_w = int(out_w * 0.76)
+        band_w -= band_w % 2
+        band_h = max(20, int(out_h * 0.14))
+        band_h -= band_h % 2
+        band_x = (out_w - band_w) // 2
+        band_y = int(out_h * 0.80)
+
+    # Smooth 2D Gaussian blur (gblur) on the cropped subtitle strip only (Zero flickering, <2MB RAM)
+    return (
+        f"split[vmain][vsub];"
+        f"[vsub]crop={band_w}:{band_h}:{band_x}:{band_y},gblur=sigma={sigma}:steps=2[vblur];"
+        f"[vmain][vblur]overlay={band_x}:{band_y}"
+    )
+
+
 def update_job_step(job_id: str, step_name: str, progress: int, log_msg: Optional[str] = None):
     step_order = [
         "extract_audio",
@@ -244,7 +330,12 @@ def update_job_step(job_id: str, step_name: str, progress: int, log_msg: Optiona
 # 3. STEP 2 & 3: GROQ WHISPER TRANSCRIPTION
 # -------------------------------------------------------------------------
 async def groq_whisper_transcribe(
-    audio_path: Path, groq_key: str, source_lang: str, job_id: str, total_video_dur: float
+    audio_path: Path,
+    groq_key: str,
+    source_lang: str,
+    job_id: str,
+    total_video_dur: float,
+    mode: str = "AI Recap",
 ) -> List[Dict[str, Any]]:
     update_job_step(job_id, "upload", 14, "အသံဖိုင်ကို ဆာဗာဆီ ပို့နေပါတယ်... 0%")
     headers = {"Authorization": f"Bearer {groq_key.strip()}"}
@@ -283,32 +374,36 @@ async def groq_whisper_transcribe(
         if float(seg.get("no_speech_prob", 0.0)) > 0.88:
             continue
         st = max(0.0, float(seg.get("start", 0.0)))
-        en = min(total_video_dur, max(st + 0.5, float(seg.get("end", st + 2.0))))
+        en = min(total_video_dur, max(st + 0.4, float(seg.get("end", st + 1.5))))
         cleaned_segments.append({"start": st, "end": en, "text": txt})
 
-    merged: List[Dict[str, Any]] = []
-    for seg in cleaned_segments:
-        if not merged:
-            merged.append(seg)
-            continue
-        prev = merged[-1]
-        gap = seg["start"] - prev["end"]
-        combined_dur = seg["end"] - prev["start"]
-        if gap < 0.35 and (prev["end"] - prev["start"] < 2.2 or combined_dur <= 5.5):
-            prev["end"] = seg["end"]
-            prev["text"] = f"{prev['text']} {seg['text']}".strip()
-        else:
-            merged.append(seg)
+    # MM SRT SUBTITLE သို့မဟုတ် Subtitle (Original + subs) Mode တွင် မူရင်းအသံအချိန်အတိုင်း အတိအကျထားသည်
+    if mode in ("MM SRT SUBTITLE", "Subtitle"):
+        final_segs = cleaned_segments
+    else:
+        final_segs = []
+        for seg in cleaned_segments:
+            if not final_segs:
+                final_segs.append(seg)
+                continue
+            prev = final_segs[-1]
+            gap = seg["start"] - prev["end"]
+            combined_dur = seg["end"] - prev["start"]
+            if gap < 0.35 and (prev["end"] - prev["start"] < 2.2 or combined_dur <= 5.5):
+                prev["end"] = seg["end"]
+                prev["text"] = f"{prev['text']} {seg['text']}".strip()
+            else:
+                final_segs.append(seg)
 
-    if not merged:
-        merged = [{"start": 0.0, "end": min(10.0, total_video_dur), "text": res_json.get("text", "...")}]
+    if not final_segs:
+        final_segs = [{"start": 0.0, "end": min(5.0, total_video_dur), "text": res_json.get("text", "...")}]
 
-    for i, m in enumerate(merged):
+    for i, m in enumerate(final_segs):
         m["index"] = i
         m["start"] = round(m["start"], 2)
         m["end"] = round(m["end"], 2)
 
-    return merged
+    return final_segs
 
 
 # -------------------------------------------------------------------------
@@ -331,15 +426,32 @@ async def gemini_generate_recap(
     }
     target_lang_desc = lang_map.get(output_lang, lang_map["မြန်မာ"])
 
-    pro_instruction = ""
-    if mode == "Pro AI Recap":
-        pro_instruction = "\n- Since Pro AI Recap mode is active, make the storytelling extra dramatic, smooth, and emotionally engaging like a top TikTok Movie Recap channel."
+    if mode in ("MM SRT SUBTITLE", "Subtitle"):
+        system_instruction = f"""You are a professional Burmese Donghua (Xianxia/Cultivation) & Drama Fansub Subtitle Translator.
+Translate each input dialogue line into 100% natural, emotional {target_lang_desc} subtitles matching the exact character tone.
 
-    system_instruction = f"""You are an expert translator and voiceover scriptwriter for Chinese Donghua (Xianxia/Cultivation) and short dramas.
+STRICT FANSUB RULES:
+1. CHARACTER DIALOGUE & PRONOUNS: Use natural context-appropriate pronouns ("ငါ", "မင်း", "ရှင်", "ရှင့်ရဲ့", "ညီမတော်", "သခင်လေး") and natural spoken endings ("ပါလား", "တော့", "တာလဲ", "ပြီပဲ!", "ပါဦး", "လိုက်တာ", "ရစေ").
+2. XIANXIA / CULTIVATION GLOSSARY:
+   - 法则之力 / 法则 -> နိယာမစွမ်းအင် / နိယာမတွေ
+   - 准帝 -> အင်ပါယာလောင်းအဆင့်, 大帝 -> မဟာအင်ပါယာအဆင့်
+   - 修为 / 境界 -> ကျင့်ကြံမှုအဆင့်, 威压 / 气息 -> ဖိအား / အရှိန်အဝါ
+   - 融合 -> ပေါင်းစည်းတယ်, 突破 -> အဆင့်တက်သွားပြီ
+   - 圣女 -> သန့်ရှင်းသူမလေး, 圣子 -> သန့်ရှင်းသူသား, 宗主 / 掌门 -> ဂိုဏ်းချုပ်, 灵石 -> ဝိညာဉ်ကျောက်တုံး
+3. SUBTITLE FORMATTING:
+   - For "MM SRT SUBTITLE": Do NOT put "။" at the end of lines, and split lines longer than 22 chars with "\\n".
+   - For "Subtitle": Put spaces between phrases so captions display cleanly on screen.
+4. Keep the exact same `index` for every segment."""
+    else:
+        pro_instruction = ""
+        if mode == "Pro AI Recap":
+            pro_instruction = "\n- Since Pro AI Recap mode is active, make the storytelling extra dramatic, smooth, and emotionally engaging."
+
+        system_instruction = f"""You are an expert translator and voiceover scriptwriter for Chinese Donghua (Xianxia/Cultivation) and short dramas.
 Translate each input segment directly and accurately into {target_lang_desc} so that it matches the exact meaning, emotion, and timing of the scene.{pro_instruction}
 
 STRICT BURMESE RULES:
-1. DIRECT SPOKEN STYLE: Translate each segment naturally as spoken Burmese dialogue/narration (e.g., "ရှောင်ဟွာ မင်းဘာလုပ်နေတာလဲ။", "သန့်ရှင်းသူမလေး ရောက်လာပြီ။", "ရောက်လာတော့လည်း ဘာဖြစ်လဲ။").
+1. DIRECT SPOKEN STYLE: Translate each segment naturally as spoken Burmese dialogue/narration (e.g., "ရှောင်ဟွာ မင်းဘာလုပ်နေတာလဲ။", "သန့်ရှင်းသူမလေး ရောက်လာပြီ။").
 2. NATURAL SPOKEN ENDINGS: Always use spoken particles ("တယ်", "လဲ", "ပြီ", "တာပေါ့", "ပါတယ်", "လား", "နော်"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
 3. XIANXIA / CULTIVATION TERMINOLOGY:
    - 圣女 -> သန့်ရှင်းသူမလေး, 圣子 -> သန့်ရှင်းသူသား, 掌门 / 宗主 -> ဂိုဏ်းချုပ်
@@ -424,7 +536,11 @@ STRICT BURMESE RULES:
                 raise RuntimeError(f"Gemini API Error: {last_err}")
 
             for item in parsed.get("segments", []):
-                narr_map[int(item["index"])] = clean_burmese_text(item.get("narration", ""))
+                raw_narr = item.get("narration", "")
+                if mode == "MM SRT SUBTITLE":
+                    narr_map[int(item["index"])] = format_srt_subtitle_lines(raw_narr)
+                else:
+                    narr_map[int(item["index"])] = clean_burmese_text(raw_narr)
             if parsed.get("tiktok_caption"):
                 tiktok_cap = clean_burmese_text(parsed["tiktok_caption"])
 
@@ -442,7 +558,7 @@ STRICT BURMESE RULES:
 
 
 # -------------------------------------------------------------------------
-# 5. STEP 6: ASS SUBTITLE BUILDER (SCALED FONT SIZE & WRAP FIX)
+# 5. STEP 6: ASS SUBTITLE BUILDER
 # -------------------------------------------------------------------------
 def build_ass_subtitles(
     caption_events: List[Dict[str, Any]],
@@ -459,7 +575,6 @@ def build_ass_subtitles(
     else:
         font_name = "Padauk"
 
-    # Video Resolution အလိုက် Text size နှင့် Outline width ကို အချိုးကျ ချဲ့ပေးခြင်း (Preview နှင့် 100% တူစေရန်)
     raw_font_size = int(cfg.get("text_size", 32))
     scale_ratio = play_res_y / 380.0
     font_size = max(16, int(round(raw_font_size * scale_ratio)))
@@ -474,14 +589,12 @@ def build_ass_subtitles(
     bold_flag = -1 if cfg.get("bold", True) else 0
     border_style = 3 if cfg.get("box_bg", False) else 1
 
-    # Vertical position (10% = အပေါ်ပိုင်း, 89% = အောက်ခြေ) ကို ASS MarginV သို့ အတိအကျ ပြောင်းလဲခြင်း
     vert_pct = max(8, min(96, int(cfg.get("vertical_position", 89))))
     margin_v = max(12, int(play_res_y * (100 - vert_pct) / 100.0))
 
     width_pct = max(40, min(100, int(cfg.get("caption_width", 96))))
     side_margin = max(12, int(play_res_x * (100 - width_pct) / 200.0))
 
-    # WrapStyle: 0 သည် MarginL/MarginR အကျယ်အတိုင်း စာကြောင်းကို အလိုအလျောက် ညှိပေးသည်
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {play_res_x}
@@ -507,7 +620,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # -------------------------------------------------------------------------
-# 6. MAIN 7-STEP PIPELINE WORKER (ZOOM + CROP + FASTSTART AUTO-DOWNLOAD)
+# 6. MAIN 7-STEP PIPELINE WORKER (FAST SUBTITLE MODE + SMOOTH GBLUR)
 # -------------------------------------------------------------------------
 async def process_recap_pipeline(
     job_id: str, video_path: Path, cfg: Dict[str, Any], logo_path: Optional[Path]
@@ -519,6 +632,7 @@ async def process_recap_pipeline(
         groq_key = cfg.get("groq_key") or DEFAULT_GROQ_KEY
         gemini_key = cfg.get("gemini_key") or DEFAULT_GEMINI_KEY
         gemini_model = cfg.get("gemini_model") or DEFAULT_GEMINI_MODEL
+        mode = cfg.get("mode", "AI Recap")
 
         if not groq_key or not gemini_key:
             raise RuntimeError("Groq API Key နှင့် Gemini API Key များကို 'Own key' တွင် ထည့်သွင်းပေးပါ။")
@@ -569,18 +683,19 @@ async def process_recap_pipeline(
             cfg.get("source_language", "Auto-detect"),
             job_id,
             total_video_dur,
+            mode,
         )
 
         if JOBS.get(job_id, {}).get("status") == "cancelled":
             return
 
         # 4. Translate
-        update_job_step(job_id, "translate", 36, "ဘာသာပြန်နေပါတယ်")
+        update_job_step(job_id, "translate", 38, "ဘာသာပြန်နေပါတယ်")
         recap_data = await gemini_generate_recap(
             segments=segments,
             gemini_key=gemini_key,
             gemini_model=gemini_model,
-            mode=cfg.get("mode", "AI Recap"),
+            mode=mode,
             output_lang=cfg.get("output_language", "မြန်မာ"),
             want_hashtags=cfg.get("ai_hashtags", False),
             default_hashtags=cfg.get("default_hashtags", ""),
@@ -590,44 +705,21 @@ async def process_recap_pipeline(
         JOBS[job_id]["tiktok_caption"] = recap_data["tiktok_caption"]
         save_job_state(job_id)
 
-        # 5. Voice
-        update_job_step(job_id, "voice", 50, "အသံထုတ်နေပါတယ်")
-        voice_short = cfg.get("voice_name", "Thiha")
-        voice_id = VOICE_MAP.get(voice_short, "my-MM-ThihaNeural")
-        speed_val = int(cfg.get("voice_speed", 30))
-        pitch_val = int(cfg.get("voice_pitch", 0))
-        rate_str = f"{speed_val:+d}%"
-        pitch_str = f"{pitch_val:+d}Hz"
+        # -----------------------------------------------------------------
+        # OPTION A: MM SRT SUBTITLE MODE (Instant .srt file output)
+        # -----------------------------------------------------------------
+        if mode == "MM SRT SUBTITLE":
+            srt_file = job_dir / "subtitles.srt"
+            build_srt_file(segments, srt_file)
+            for k in JOBS[job_id]["steps"]:
+                JOBS[job_id]["steps"][k] = "done"
+            JOBS[job_id]["progress"] = 100
+            JOBS[job_id]["status"] = "completed"
+            JOBS[job_id]["output_url"] = f"/api/download/{job_id}.srt"
+            append_job_log(job_id, "မြန်မာ .srt စာတန်းထိုးဖိုင် ထုတ်ပြီးပါပြီ!")
+            return
 
-        for seg in segments:
-            if JOBS.get(job_id, {}).get("status") == "cancelled":
-                return
-            raw_tts = job_dir / f"raw_tts_{seg['index']:04d}.mp3"
-            trim_tts = job_dir / f"tts_{seg['index']:04d}.mp3"
-            comm = edge_tts.Communicate(seg["narration"], voice_id, rate=rate_str, pitch=pitch_str)
-            await comm.save(str(raw_tts))
-            await asyncio.to_thread(
-                run_cmd,
-                [
-                    "ffmpeg", "-y", "-threads", "1", "-i", str(raw_tts),
-                    "-af", "silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.08:start_threshold=-45dB,areverse",
-                    "-ar", "24000", "-ac", "1", "-b:a", "96k",
-                    str(trim_tts),
-                ],
-            )
-            raw_tts.unlink(missing_ok=True)
-            seg["tts_file"] = trim_tts
-            seg["tts_duration"] = max(0.35, await asyncio.to_thread(get_duration, trim_tts))
-
-        append_job_log(job_id, "ပြီးပါပြီ")
-
-        # 6. Timeline + captions
-        update_job_step(job_id, "timeline_captions", 72, "ရုပ်သံဖိုင်တွေ ဒေါင်းလုဒ် လုပ်နေပါတယ်...")
-        words_per_cap = max(3, int(cfg.get("words_per_caption", 9)))
-        cap_width_pct = int(cfg.get("caption_width", 96))
-        cap_text_size = int(cfg.get("text_size", 32))
-
-        # Custom Crop & Zoom Geometry Filter တည်ဆောက်ခြင်း
+        # Geometry Filter (Crop + Zoom + Scale)
         geom_filters = []
         cx = float(cfg.get("crop_x", 0))
         cy = float(cfg.get("crop_y", 0))
@@ -642,7 +734,6 @@ async def process_recap_pipeline(
             crop_px_h -= crop_px_h % 2
             geom_filters.append(f"crop={crop_px_w}:{crop_px_h}:{crop_px_x}:{crop_px_y}")
 
-        # Zoom (100% မှ 150%) ကို အလယ်ဗဟိုမှ အတိအကျ ဆွဲချဲ့ခြင်း
         zoom_pct = int(cfg.get("zoom", 100))
         if zoom_pct > 100:
             zf = zoom_pct / 100.0
@@ -650,7 +741,6 @@ async def process_recap_pipeline(
                 f"crop=trunc(iw/{zf}/2)*2:trunc(ih/{zf}/2)*2:(iw-ow)/2:(ih-oh)/2"
             )
 
-        # Ratio Fit Mode (Crop fill vs Pad blur)
         fit_mode = cfg.get("fit_mode", "crop")
         if ratio != "Original" and fit_mode == "crop":
             geom_filters.append(
@@ -660,7 +750,145 @@ async def process_recap_pipeline(
             geom_filters.append(f"scale={out_w}:{out_h}")
 
         geom_chain = ",".join(geom_filters)
+        words_per_cap = max(3, int(cfg.get("words_per_caption", 9)))
+        cap_width_pct = int(cfg.get("caption_width", 96))
+        cap_text_size = int(cfg.get("text_size", 32))
 
+        # -----------------------------------------------------------------
+        # OPTION B: SUBTITLE (ORIGINAL + SUBS) SERVER CLOUD FAST MODE
+        # (Skips TTS & Segment Slicing -> Direct Single-Pass Fast Server Render!)
+        # -----------------------------------------------------------------
+        if mode == "Subtitle":
+            update_job_step(job_id, "voice", 58, "မူရင်းအသံ (Original Audio) ကို အသုံးပြုနေပါတယ်...")
+            update_job_step(job_id, "timeline_captions", 72, "စာတန်းထိုး အချိန်မှတ်တမ်းများ ချိန်ညှိနေပါတယ်...")
+
+            caption_events = []
+            for seg in segments:
+                seg_st = float(seg["start"])
+                seg_en = max(seg_st + 0.4, float(seg["end"]))
+                seg_dur = seg_en - seg_st
+                phrases = split_into_short_phrases(
+                    seg["narration"], words_per_cap, cap_width_pct, cap_text_size
+                )
+                total_chars = max(1, sum(len(p) for p in phrases))
+                cur_offset = 0.0
+                for ph in phrases:
+                    ph_dur = seg_dur * (len(ph) / total_chars)
+                    caption_events.append({
+                        "start": seg_st + cur_offset,
+                        "end": seg_st + cur_offset + ph_dur,
+                        "text": ph,
+                    })
+                    cur_offset += ph_dur
+
+            ass_path = job_dir / "captions.ass"
+            build_ass_subtitles(caption_events, cfg, out_w, out_h, ass_path)
+
+            update_job_step(
+                job_id,
+                "render_video",
+                85,
+                "Fast render (Server Cloud Original + Subs) နဲ့ အမြန်ထုတ်နေပါတယ်...",
+            )
+
+            vf_filters = [geom_chain]
+            if cfg.get("random_4px_crop", False):
+                vf_filters.append(f"crop=iw-8:ih-8:4:4,scale={out_w}:{out_h}")
+            if cfg.get("mirror", False):
+                vf_filters.append("hflip")
+
+            smooth_blur = build_smooth_blur_filter(cfg, out_w, out_h)
+            if smooth_blur:
+                vf_filters.append(smooth_blur)
+
+            if cfg.get("captions_on", True):
+                escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
+                vf_filters.append(f"ass='{escaped_ass}'")
+
+            if cfg.get("watermark_on", False) and cfg.get("watermark_text"):
+                wm_txt = re.sub(r"[^A-Za-z0-9_\-\.\s]", "", cfg["watermark_text"])
+                wm_size = int(cfg.get("watermark_size", 17))
+                wm_op = int(cfg.get("watermark_opacity", 65)) / 100.0
+                if cfg.get("watermark_move", False):
+                    x_expr = "(w-text_w)*0.5+sin(t*0.8)*(w*0.35)"
+                    y_expr = "(h-text_h)*0.5+cos(t*0.6)*(h*0.35)"
+                else:
+                    x_expr = "w-tw-24"
+                    y_expr = "h*0.82"
+                vf_filters.append(
+                    f"drawtext=text='{wm_txt}':fontsize={wm_size}:fontcolor=white@{wm_op:.2f}:x={x_expr}:y={y_expr}"
+                )
+
+            final_video = job_dir / "final_recap.mp4"
+            vf_chain = ",".join(vf_filters)
+
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-threads", "2",
+                "-i", str(video_path),
+                "-vf", vf_chain,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "23",
+                "-maxrate", "2.8M",
+                "-bufsize", "5.6M",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                str(final_video),
+            ]
+            await asyncio.to_thread(run_cmd, ffmpeg_cmd)
+
+            for k in JOBS[job_id]["steps"]:
+                JOBS[job_id]["steps"][k] = "done"
+            JOBS[job_id]["progress"] = 100
+            JOBS[job_id]["status"] = "completed"
+            JOBS[job_id]["output_url"] = f"/api/download/{job_id}"
+            append_job_log(job_id, "Original + Subs ဗီဒီယို ထုတ်ပြီးပါပြီ! အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲနေပါတယ်...")
+            return
+
+        # -----------------------------------------------------------------
+        # OPTION C: AI RECAP & PRO AI RECAP (4x Parallel TTS + Smooth Blur)
+        # -----------------------------------------------------------------
+        update_job_step(job_id, "voice", 52, "အသံထုတ်နေပါတယ် (Fast Parallel Server TTS)...")
+        voice_short = cfg.get("voice_name", "Thiha")
+        voice_id = VOICE_MAP.get(voice_short, "my-MM-ThihaNeural")
+        speed_val = int(cfg.get("voice_speed", 30))
+        pitch_val = int(cfg.get("voice_pitch", 0))
+        rate_str = f"{speed_val:+d}%"
+        pitch_str = f"{pitch_val:+d}Hz"
+
+        tts_sem = asyncio.Semaphore(4)
+
+        async def generate_single_tts(seg_item: Dict[str, Any]):
+            async with tts_sem:
+                if JOBS.get(job_id, {}).get("status") == "cancelled":
+                    return
+                raw_tts = job_dir / f"raw_tts_{seg_item['index']:04d}.mp3"
+                trim_tts = job_dir / f"tts_{seg_item['index']:04d}.mp3"
+                comm = edge_tts.Communicate(seg_item["narration"], voice_id, rate=rate_str, pitch=pitch_str)
+                await comm.save(str(raw_tts))
+                await asyncio.to_thread(
+                    run_cmd,
+                    [
+                        "ffmpeg", "-y", "-threads", "1", "-i", str(raw_tts),
+                        "-af", "silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.08:start_threshold=-45dB,areverse",
+                        "-ar", "24000", "-ac", "1", "-b:a", "96k",
+                        str(trim_tts),
+                    ],
+                )
+                raw_tts.unlink(missing_ok=True)
+                seg_item["tts_file"] = trim_tts
+                seg_item["tts_duration"] = max(0.35, await asyncio.to_thread(get_duration, trim_tts))
+
+        await asyncio.gather(*(generate_single_tts(s) for s in segments))
+        append_job_log(job_id, "ပြီးပါပြီ")
+
+        # 6. Timeline + captions
+        update_job_step(job_id, "timeline_captions", 72, "ရုပ်သံဖိုင်တွေ ဒေါင်းလုဒ် လုပ်နေပါတယ်...")
         caption_events = []
         concat_v_list: List[Path] = []
         concat_a_list: List[Path] = []
@@ -763,12 +991,12 @@ async def process_recap_pipeline(
         ass_path = job_dir / "captions.ass"
         build_ass_subtitles(caption_events, cfg, out_w, out_h, ass_path)
 
-        # 7. Render video
+        # 7. Render video (Smooth Gaussian Blur + Captions)
         update_job_step(
             job_id,
             "render_video",
             86,
-            "Fast render (server cloud) နဲ့ လုပ်နေပါတယ်... (TikTok သို့မဟုတ် အခြား App သုံးနေနိုင်ပါသည်)",
+            "Fast render (server cloud) နဲ့ လုပ်နေပါတယ်...",
         )
         vf_filters = []
 
@@ -778,14 +1006,9 @@ async def process_recap_pipeline(
         if cfg.get("mirror", False):
             vf_filters.append("hflip")
 
-        if cfg.get("full_band", True) or int(cfg.get("blur_boxes", 0)) > 0:
-            b_height_pct = max(5, min(40, int(cfg.get("band_height", 18))))
-            b_bottom_pct = max(0, min(40, int(cfg.get("band_from_bottom", 0))))
-            band_h = max(16, int(out_h * (b_height_pct / 100.0)))
-            band_y = max(2, out_h - band_h - int(out_h * (b_bottom_pct / 100.0)))
-            if band_y + band_h >= out_h:
-                band_h = out_h - band_y - 2
-            vf_filters.append(f"delogo=x=2:y={band_y}:w={out_w - 4}:h={band_h}")
+        smooth_blur = build_smooth_blur_filter(cfg, out_w, out_h)
+        if smooth_blur:
+            vf_filters.append(smooth_blur)
 
         if cfg.get("captions_on", True):
             escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
@@ -808,7 +1031,6 @@ async def process_recap_pipeline(
         final_video = job_dir / "final_recap.mp4"
         vf_chain = ",".join(vf_filters) if vf_filters else "null"
 
-        # -movflags +faststart နှင့် Bitrate ချိန်ညှိထားသောကြောင့် ဖိုင်အရည်အသွေးကြည်လင်ပြီး 2 စက္ကန့်အတွင်း ဒေါင်းလုဒ်ဆွဲနိုင်သည်
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-threads", "2",
@@ -939,15 +1161,27 @@ async def get_status(job_id: str):
 
 @app.get("/api/download/{job_id}")
 async def download_video(job_id: str):
-    final_video = DATA_DIR / job_id / "final_recap.mp4"
+    clean_id = job_id.replace(".srt", "")
+    job = load_job_state(clean_id) or {}
+    orig_name = Path(job.get("filename") or "video.mp4").stem
+
+    if job_id.endswith(".srt") or job.get("mode") == "MM SRT SUBTITLE":
+        srt_file = DATA_DIR / clean_id / "subtitles.srt"
+        if not srt_file.exists():
+            raise HTTPException(status_code=404, detail="SRT file not ready")
+        return FileResponse(
+            srt_file,
+            media_type="application/x-subrip",
+            filename=f"{orig_name}_MM.srt",
+        )
+
+    final_video = DATA_DIR / clean_id / "final_recap.mp4"
     if not final_video.exists():
         raise HTTPException(status_code=404, detail="Video not ready")
-    job = load_job_state(job_id) or {}
-    orig_name = Path(job.get("filename") or "video.mp4").stem
     return FileResponse(
         final_video,
         media_type="video/mp4",
-        filename=f"Recap_{orig_name}_{job_id}.mp4",
+        filename=f"Recap_{orig_name}_{clean_id}.mp4",
         headers={"Cache-Control": "public, max-age=3600"},
     )
 
