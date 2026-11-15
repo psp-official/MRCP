@@ -244,14 +244,14 @@
                 <div class="text-[11px] text-slate-500 leading-snug mt-0.5">မြန်မာ .srt ဖိုင်သီးသန့်</div>
               </div>
 
-              <!-- 4. Subtitle (Original + subs with Server Cloud Fast Mode) -->
-              <div onclick="selectMode('Subtitle')" id="modeCard-Subtitle" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
+              <!-- 4. Voiceover Recap (Formerly Subtitle / Original + Subs) -->
+              <div onclick="selectMode('Voiceover Recap')" id="modeCard-Voiceover Recap" class="cursor-pointer border border-slate-200 rounded-2xl p-2.5">
                 <div class="flex items-center justify-between mb-1.5">
-                  <div id="modeRadio-Subtitle" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center"></div>
-                  <span class="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">FAST</span>
+                  <div id="modeRadio-Voiceover Recap" class="w-4 h-4 rounded-full border-2 border-slate-300 flex items-center justify-center"></div>
+                  <span class="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">STORY</span>
                 </div>
-                <div class="font-bold text-sm text-slate-900">Subtitle</div>
-                <div class="text-[11px] text-slate-500 leading-snug mt-0.5">Original + subs · Cloud</div>
+                <div class="font-bold text-sm text-slate-900">Voiceover Recap</div>
+                <div class="text-[11px] text-slate-500 leading-snug mt-0.5">ပုံပြင်ပြောဟန် + မူရင်းအသံ Auto</div>
               </div>
             </div>
 
@@ -277,7 +277,7 @@
               <button onclick="selectOutLang('English')" id="outLang-English" class="py-2 rounded-lg text-slate-400">English</button>
               <button onclick="selectOutLang('ไทย')" id="outLang-ไทย" class="py-2 rounded-lg text-slate-400">ไทย</button>
             </div>
-            <p class="text-[11px] text-slate-500 mt-1.5">AI Recap makes Burmese only — choose Pro AI Recap or Subtitle for English or Thai.</p>
+            <p class="text-[11px] text-slate-500 mt-1.5">AI Recap makes Burmese only — choose Pro AI Recap or Voiceover Recap for English or Thai.</p>
           </div>
 
           <div>
@@ -1119,7 +1119,7 @@
 
     function selectMode(m) {
       state.mode = m;
-      ["AI Recap", "Pro AI Recap", "MM SRT SUBTITLE", "Subtitle"].forEach(item => {
+      ["AI Recap", "Pro AI Recap", "MM SRT SUBTITLE", "Voiceover Recap"].forEach(item => {
         const card = document.getElementById(`modeCard-${item}`);
         const radio = document.getElementById(`modeRadio-${item}`);
         if (!card || !radio) return;
@@ -1139,12 +1139,12 @@
         if (m === "Pro AI Recap") {
           badge.classList.remove("hidden");
           badge.innerHTML = '☁️ <b>Pro Server Cloud Mode:</b> ဗီဒီယိုကို Server ပေါ်တွင် ထုတ်ပေးမည်ဖြစ်၍ Render လုပ်နေစဉ် TikTok သို့မဟုတ် အခြား App များကို စိတ်ကြိုက် သွားရောက်ကြည့်ရှုနိုင်ပါသည်။ ပြီးဆုံးသည်နှင့် အလိုအလျောက် Download ဆွဲပေးပါမည်။';
-        } else if (m === "Subtitle") {
+        } else if (m === "Voiceover Recap") {
           badge.classList.remove("hidden");
-          badge.innerHTML = '⚡ <b>Server Cloud Fast Mode (Original + Subs):</b> မူရင်းအသံ (Original Audio) ကိုမပျက်စေဘဲ မြန်မာစာတန်းထိုးနှင့် Smooth Blur ကို Server ပေါ်တွင် တိုက်ရိုက် အမြန်ထုတ်ပေးပါမည်။ TikTok သို့မဟုတ် အခြား App များ သုံးနေနိုင်ပါသည်။';
+          badge.innerHTML = '🎙️ <b>Voiceover Recap Mode:</b> ပုံပြင်ဆန်ဆန် စိတ်ဝင်စားဖွယ် ပြောနေချိန်တွင် မူရင်းအသံကို အလိုအလျောက် ဖျောက်ထားပေးပြီး၊ စကားမပြောသည့် အက်ရှင်/လိုအပ်သည့် အချိန်များတွင် မူရင်းအသံကို ပြန်ဖွင့်ပေးပါမည်။';
         } else if (m === "MM SRT SUBTITLE") {
           badge.classList.remove("hidden");
-          badge.innerHTML = '📝 <b>MM SRT Subtitle Mode:</b> ဗီဒီယို Render လုပ်ရန်မလိုဘဲ အချိန်ကိုက် မြန်မာစာတန်းထိုး (<b>.srt</b>) ဖိုင်သီးသန့်ကို အမြန်ထုတ်ပေးပြီး အလိုအလျောက် Download ဆွဲပေးပါမည်။';
+          badge.innerHTML = '📝 <b>MM SRT Subtitle Mode:</b> ဗီဒီယို Render လုပ်ရန်မလိုဘဲ အချိန်ကိုက် တစ်ကြောင်းချင်း ခွဲထုတ်ထားသည့် မြန်မာစာတန်းထိုး (<b>.srt</b>) ဖိုင်သီးသန့်ကို အမြန်ထုတ်ပေးပါမည်။';
         } else {
           badge.classList.add("hidden");
         }
