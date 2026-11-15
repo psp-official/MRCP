@@ -16,20 +16,22 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (Fast Translate & No-Timeout Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (Multi-Provider Selectable Edition)")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
-# တရားဝင် အမြန်ဆုံး အလုပ်လုပ်သော Gemini Models စာရင်း
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
+
 GEMINI_FALLBACK_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.8-flash-lite",
-    "gemini-3.8-flash",
 ]
 
 VOICE_MAP = {
@@ -381,8 +383,120 @@ def update_job_step(job_id: str, step_name: str, progress: int, log_msg: Optiona
 
 
 # -------------------------------------------------------------------------
-# 3. STEP 2 & 3: GROQ WHISPER TRANSCRIPTION
+# 3. STEP 2 & 3: TRANSCRIBE PROVIDERS (1. GROQ WHISPER  OR  2. ASSEMBLYAI 3.6 PRO)
 # -------------------------------------------------------------------------
+async def assemblyai_transcribe(
+    audio_path: Path,
+    aai_key: str,
+    source_lang: str,
+    job_id: str,
+    total_video_dur: float,
+    mode: str = "AI Recap",
+) -> List[Dict[str, Any]]:
+    """AssemblyAI Universal 3.6 Pro (Automatic Language Detection) သီးသန့် အသံဖမ်းစနစ်"""
+    headers = {"authorization": aai_key.strip()}
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        update_job_step(job_id, "upload", 14, "AssemblyAI သို့ အသံဖိုင် ပို့နေပါတယ်...")
+        with open(audio_path, "rb") as f:
+            up_res = await client.post(
+                "https://api.assemblyai.com/v2/upload",
+                headers=headers,
+                content=f.read(),
+            )
+        if up_res.status_code != 200:
+            raise RuntimeError(f"AssemblyAI Upload Error ({up_res.status_code}): {up_res.text[:200]}")
+        upload_url = up_res.json()["upload_url"]
+
+        update_job_step(job_id, "transcribe", 24, "AssemblyAI (Universal 3.6 Pro) ဖြင့် စာသားထုတ်နေပါတယ်...")
+        base_payload: Dict[str, Any] = {
+            "audio_url": upload_url,
+            "disfluencies": False,
+        }
+        if source_lang and source_lang != "Auto-detect":
+            base_payload["language_code"] = source_lang
+        else:
+            base_payload["language_detection"] = True
+
+        # Try Universal 3.6 Pro speech_models first; fallback to standard best model if needed
+        payload_36 = {
+            **base_payload,
+            "speech_models": ["universal-3-6-pro", "universal-3-5-pro", "universal-2"],
+        }
+        tr_res = await client.post(
+            "https://api.assemblyai.com/v2/transcript", headers=headers, json=payload_36
+        )
+        if tr_res.status_code != 200:
+            tr_res = await client.post(
+                "https://api.assemblyai.com/v2/transcript", headers=headers, json=base_payload
+            )
+        if tr_res.status_code != 200:
+            raise RuntimeError(f"AssemblyAI Transcript Error ({tr_res.status_code}): {tr_res.text[:200]}")
+
+        transcript_id = tr_res.json()["id"]
+
+        while True:
+            st_res = await client.get(
+                f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers
+            )
+            data = st_res.json()
+            status = data.get("status")
+            if status == "completed":
+                break
+            elif status == "error":
+                raise RuntimeError(f"AssemblyAI Error: {data.get('error')}")
+            await asyncio.sleep(2.5)
+
+        words = data.get("words") or []
+        is_zh = str(data.get("language_code", "")).startswith("zh")
+        cleaned_segments: List[Dict[str, Any]] = []
+
+        if words:
+            cur_w: List[str] = []
+            seg_st = words[0]["start"] / 1000.0
+            prev_end = words[0]["end"] / 1000.0
+            max_seg_dur = 3.5 if mode == "MM SRT SUBTITLE" else 5.5
+
+            for w in words:
+                w_st = w["start"] / 1000.0
+                w_en = w["end"] / 1000.0
+                gap = w_st - prev_end
+                dur = prev_end - seg_st
+
+                if cur_w and (
+                    (gap >= 0.45 and dur >= 1.2)
+                    or (dur >= max_seg_dur and w["text"].endswith(("。", "！", "？", "，", ".", "!", "?")))
+                    or dur >= (max_seg_dur + 2.2)
+                ):
+                    cleaned_segments.append({
+                        "start": round(seg_st, 2),
+                        "end": round(prev_end, 2),
+                        "text": "".join(cur_w) if is_zh else " ".join(cur_w),
+                    })
+                    cur_w = []
+                    seg_st = w_st
+
+                cur_w.append(w["text"])
+                prev_end = w_en
+
+            if cur_w:
+                cleaned_segments.append({
+                    "start": round(seg_st, 2),
+                    "end": round(prev_end, 2),
+                    "text": "".join(cur_w) if is_zh else " ".join(cur_w),
+                })
+
+        if not cleaned_segments:
+            cleaned_segments = [{
+                "start": 0.0,
+                "end": min(5.0, total_video_dur),
+                "text": data.get("text") or "...",
+            }]
+
+        for i, m in enumerate(cleaned_segments):
+            m["index"] = i
+        return cleaned_segments
+
+
 async def groq_whisper_transcribe(
     audio_path: Path,
     groq_key: str,
@@ -391,7 +505,8 @@ async def groq_whisper_transcribe(
     total_video_dur: float,
     mode: str = "AI Recap",
 ) -> List[Dict[str, Any]]:
-    update_job_step(job_id, "upload", 14, "အသံဖိုင်ကို ဆာဗာဆီ ပို့နေပါတယ်... 0%")
+    """Groq Whisper Large V3 Turbo သီးသန့် အသံဖမ်းစနစ်"""
+    update_job_step(job_id, "upload", 14, "Groq Whisper သို့ အသံဖိုင် ပို့နေပါတယ်...")
     headers = {"Authorization": f"Bearer {groq_key.strip()}"}
 
     data_fields: Dict[str, Any] = {
@@ -403,7 +518,7 @@ async def groq_whisper_transcribe(
     if source_lang and source_lang != "Auto-detect":
         data_fields["language"] = source_lang
 
-    update_job_step(job_id, "transcribe", 22, "စာသားထုတ်နေပါတယ်")
+    update_job_step(job_id, "transcribe", 22, "Groq Whisper ဖြင့် စာသားထုတ်နေပါတယ်...")
     async with httpx.AsyncClient(timeout=180.0) as client:
         with open(audio_path, "rb") as f:
             files = {"file": (audio_path.name, f.read(), "audio/mpeg")}
@@ -414,7 +529,7 @@ async def groq_whisper_transcribe(
             files=files,
         )
         if res.status_code != 200:
-            raise RuntimeError(f"Groq Whisper Error ({res.status_code}): {res.text}")
+            raise RuntimeError(f"Groq Whisper Error ({res.status_code}): {res.text[:250]}")
         res_json = res.json()
 
     raw_segments = res_json.get("segments") or []
@@ -460,36 +575,65 @@ async def groq_whisper_transcribe(
 
 
 # -------------------------------------------------------------------------
-# 4. STEP 4: FAST GEMINI + GROQ FALLBACK TRANSLATION (NO TIMEOUT!)
+# 4. STEP 4: TRANSLATE PROVIDERS (1. GEMINI API  OR  2. OPENROUTER AI)
 # -------------------------------------------------------------------------
-def extract_json_safely(raw_txt: str) -> Dict[str, Any]:
-    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", " ", raw_txt)
+def extract_json_safely(raw_txt: str, batch_segments: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    OpenRouter သို့မဟုတ် Gemini မှ ပြန်လာသော မည်သည့် JSON / Text ပုံစံကိုမဆို
+    JSONDecodeError လုံးဝမတက်စေဘဲ စိတ်ချရစွာ ဖတ်ယူပေးခြင်း
+    """
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", " ", str(raw_txt))
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned.strip(), flags=re.IGNORECASE)
+    # Fix invalid backslash escapes (\u that isn't 4 hex digits)
+    cleaned = re.sub(r"\\(?![/\"\\bfnrt]|u[0-9a-fA-F]{4})", "", cleaned)
+
     json_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
     json_str = json_match.group(0) if json_match else cleaned.strip()
 
     try:
-        return json.loads(json_str, strict=False)
+        data = json.loads(json_str, strict=False)
+        if isinstance(data, dict) and "segments" in data:
+            return data
     except Exception:
-        fallback_segs = []
-        pattern = r'"index"\s*:\s*(\d+)\s*,\s*"narration"\s*:\s*"([^"]+)"'
-        for m in re.finditer(pattern, cleaned):
-            fallback_segs.append({"index": int(m.group(1)), "narration": m.group(2)})
+        pass
+
+    # Regex extraction fallback if OpenRouter model outputs broken JSON quotes
+    fallback_segs = []
+    pattern = r'"index"\s*:\s*(\d+)\s*,\s*"narration"\s*:\s*"([^"]+)"'
+    for m in re.finditer(pattern, cleaned):
+        fallback_segs.append({"index": int(m.group(1)), "narration": m.group(2)})
+
+    if fallback_segs:
         cap_match = re.search(r'"tiktok_caption"\s*:\s*"([^"]+)"', cleaned)
-        if fallback_segs:
-            return {
-                "segments": fallback_segs,
-                "tiktok_caption": cap_match.group(1) if cap_match else "",
-            }
-        raise ValueError(f"Invalid JSON from model: {cleaned[:160]}")
+        return {
+            "segments": fallback_segs,
+            "tiktok_caption": cap_match.group(1) if cap_match else "",
+        }
+
+    # Line-by-line fallback if a free OpenRouter model outputs plain lines
+    lines = [
+        ln.strip()
+        for ln in cleaned.splitlines()
+        if ln.strip() and not ln.strip().startswith(("{", "}", "[", "]"))
+    ]
+    if lines:
+        for i, seg in enumerate(batch_segments):
+            txt_line = lines[i] if i < len(lines) else lines[-1]
+            txt_line = re.sub(r"^\d+[\.\)\:\-\s]+", "", txt_line)
+            fallback_segs.append({"index": seg["index"], "narration": txt_line})
+        return {"segments": fallback_segs, "tiktok_caption": ""}
+
+    raise ValueError(f"Unable to parse AI response: {cleaned[:160]}")
 
 
-async def gemini_generate_recap(
+async def translate_segments_with_provider(
     job_id: str,
     segments: List[Dict[str, Any]],
+    translate_provider: str,
     gemini_key: str,
-    groq_key: str,
     gemini_model: str,
+    openrouter_key: str,
+    openrouter_model: str,
     mode: str,
     output_lang: str,
     want_hashtags: bool,
@@ -550,21 +694,14 @@ STRICT BURMESE RULES:
 4. PHRASE SPACING: Put spaces between Burmese phrases and use "၊" and "။" so subtitles can break into clean single-line captions.
 5. Output ONLY valid JSON: {{"segments": [{{"index": 0, "narration": "..."}}], "tiktok_caption": "..."}}"""
 
-    # မော်ဒယ်နာမည် အဟောင်း/အသစ် အားလုံးကို အလုပ်လုပ်သော တရားဝင် Gemini Models သို့ ချိတ်ဆက်ပေးခြင်း
-    preferred = gemini_model or DEFAULT_GEMINI_MODEL
-    if preferred in ("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-pro"):
-        preferred = "gemini-2.5-flash"
-    models_to_try = [preferred] + [m for m in GEMINI_FALLBACK_MODELS if m != preferred]
-
     narr_map: Dict[int, str] = {}
     tiktok_cap = "ဇာတ်လမ်းကောင်းလေးကို အဆုံးထိ အားပေးကြပါဦးနော် 🎬"
 
-    # Batch size 18 ဖြင့် ခွဲပို့ခြင်းကြောင့် 5:55 မိနစ် ဗီဒီယိုတွင်လည်း 4 စက္ကန့်အတွင်း မြန်ဆန်စွာ ပြန်ဖြေပေးနိုင်သည်
     batch_size = 18
     total_batches = max(1, (len(segments) + batch_size - 1) // batch_size)
+    provider_label = "OpenRouter AI" if translate_provider == "openrouter" else "Gemini API"
 
-    # Request တစ်ခုချင်းစီကို 45 စက္ကန့်သာ အများဆုံးစောင့်ပြီး ကြာနေပါက နောက် Model သို့ ချက်ချင်းပြောင်းသည်
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         for batch_idx, b_start in enumerate(range(0, len(segments), batch_size), start=1):
             if JOBS.get(job_id, {}).get("status") == "cancelled":
                 break
@@ -574,7 +711,7 @@ STRICT BURMESE RULES:
                 job_id,
                 "translate",
                 min(50, prog_pct),
-                f"ဘာသာပြန်နေပါတယ် ({batch_idx}/{total_batches})...",
+                f"{provider_label} ဖြင့် ဘာသာပြန်နေပါတယ် ({batch_idx}/{total_batches})...",
             )
 
             batch = segments[b_start : b_start + batch_size]
@@ -588,64 +725,89 @@ STRICT BURMESE RULES:
             ]
             user_json_str = json.dumps({"segments": prompt_payload}, ensure_ascii=False)
 
-            # responseSchema မထည့်ဘဲ responseMimeType: application/json သီးသန့်သုံးခြင်းဖြင့် 240s Hang လုံးဝမဖြစ်တော့ပါ
-            body = {
-                "systemInstruction": {"parts": [{"text": system_instruction}]},
-                "contents": [{"role": "user", "parts": [{"text": user_json_str}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                },
-            }
-
             parsed = None
             last_err = ""
 
-            # 1) Try Google Gemini Models
-            for m_name in models_to_try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key.strip()}"
-                try:
-                    res = await client.post(url, json=body)
-                    if res.status_code == 200:
-                        data = res.json()
-                        raw_txt = data["candidates"][0]["content"]["parts"][0]["text"]
-                        parsed = extract_json_safely(raw_txt)
-                        break
-                    else:
-                        last_err = f"[{m_name}] HTTP {res.status_code}: {res.text[:200]}"
-                except Exception as req_err:
-                    err_detail = str(req_err).strip() or type(req_err).__name__
-                    last_err = f"[{m_name}] {err_detail}"
-                await asyncio.sleep(1.0)
+            # =========================================================
+            # CHOICE A: OPENROUTER AI (SELECTED BY USER)
+            # =========================================================
+            if translate_provider == "openrouter":
+                or_model = (openrouter_model or DEFAULT_OPENROUTER_MODEL).strip()
+                or_fallback_models = [
+                    or_model,
+                    "google/gemini-2.0-flash-001",
+                    "deepseek/deepseek-chat-v3-0324:free",
+                    "meta-llama/llama-3.3-70b-instruct:free",
+                ]
+                seen_m = set()
+                or_models_list = [m for m in or_fallback_models if not (m in seen_m or seen_m.add(m))]
 
-            # 2) Auto-Fallback to Groq (llama-3.3-70b-versatile) if Gemini times out or quota exceeded
-            if not parsed and groq_key:
-                try:
-                    groq_res = await client.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {groq_key.strip()}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": "llama-3.3-70b-versatile",
-                            "messages": [
-                                {"role": "system", "content": system_instruction},
-                                {"role": "user", "content": user_json_str},
-                            ],
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0.3,
-                        },
-                    )
-                    if groq_res.status_code == 200:
-                        g_txt = groq_res.json()["choices"][0]["message"]["content"]
-                        parsed = extract_json_safely(g_txt)
-                    else:
-                        last_err += f" | Groq Fallback HTTP {groq_res.status_code}"
-                except Exception as g_err:
-                    last_err += f" | Groq Fallback {type(g_err).__name__}"
+                for m_name in or_models_list:
+                    try:
+                        or_res = await client.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {openrouter_key.strip()}",
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": "https://deeprecap.app",
+                                "X-Title": "AI Movie Recap Narrator",
+                            },
+                            json={
+                                "model": m_name,
+                                "messages": [
+                                    {"role": "system", "content": system_instruction},
+                                    {"role": "user", "content": user_json_str},
+                                ],
+                                "temperature": 0.3,
+                            },
+                        )
+                        if or_res.status_code == 200:
+                            or_data = or_res.json()
+                            raw_txt = or_data["choices"][0]["message"]["content"]
+                            parsed = extract_json_safely(raw_txt, batch)
+                            break
+                        else:
+                            last_err = f"OpenRouter [{m_name}] HTTP {or_res.status_code}: {or_res.text[:180]}"
+                    except Exception as req_err:
+                        err_detail = str(req_err).strip() or type(req_err).__name__
+                        last_err = f"OpenRouter [{m_name}] {err_detail}"
+                    await asyncio.sleep(1.0)
+
+            # =========================================================
+            # CHOICE B: GOOGLE GEMINI API (SELECTED BY USER)
+            # =========================================================
+            else:
+                preferred = gemini_model or DEFAULT_GEMINI_MODEL
+                if preferred in ("gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-3.5-pro"):
+                    preferred = "gemini-3.8-flash"
+                models_to_try = [preferred] + [m for m in GEMINI_FALLBACK_MODELS if m != preferred]
+
+                body = {
+                    "systemInstruction": {"parts": [{"text": system_instruction}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_json_str}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                    },
+                }
+
+                for m_name in models_to_try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key.strip()}"
+                    try:
+                        res = await client.post(url, json=body)
+                        if res.status_code == 200:
+                            data = res.json()
+                            raw_txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                            parsed = extract_json_safely(raw_txt, batch)
+                            break
+                        else:
+                            last_err = f"Gemini [{m_name}] HTTP {res.status_code}: {res.text[:180]}"
+                    except Exception as req_err:
+                        err_detail = str(req_err).strip() or type(req_err).__name__
+                        last_err = f"Gemini [{m_name}] {err_detail}"
+                    await asyncio.sleep(1.0)
 
             if not parsed:
-                raise RuntimeError(f"Translate API Error: {last_err}")
+                raise RuntimeError(f"{provider_label} Error: {last_err}")
 
             for item in parsed.get("segments", []):
                 if "index" in item and "narration" in item:
@@ -742,13 +904,26 @@ async def process_recap_pipeline(
     try:
         cleanup_old_jobs()
 
+        transcribe_provider = cfg.get("transcribe_provider", "groq")
+        translate_provider = cfg.get("translate_provider", "gemini")
+
         groq_key = cfg.get("groq_key") or DEFAULT_GROQ_KEY
+        aai_key = cfg.get("assemblyai_key") or DEFAULT_ASSEMBLYAI_KEY
         gemini_key = cfg.get("gemini_key") or DEFAULT_GEMINI_KEY
+        openrouter_key = cfg.get("openrouter_key") or DEFAULT_OPENROUTER_KEY
+
         gemini_model = cfg.get("gemini_model") or DEFAULT_GEMINI_MODEL
+        openrouter_model = cfg.get("openrouter_model") or DEFAULT_OPENROUTER_MODEL
         mode = cfg.get("mode", "AI Recap")
 
-        if not groq_key or not gemini_key:
-            raise RuntimeError("Groq API Key နှင့် Gemini API Key များကို 'Own key' တွင် ထည့်သွင်းပေးပါ။")
+        if transcribe_provider == "assemblyai" and not aai_key:
+            raise RuntimeError("AssemblyAI ကို ရွေးထားပါသဖြင့် AssemblyAI API Key ထည့်ပေးပါ။")
+        if transcribe_provider == "groq" and not groq_key:
+            raise RuntimeError("Groq Whisper ကို ရွေးထားပါသဖြင့် Groq API Key ထည့်ပေးပါ။")
+        if translate_provider == "openrouter" and not openrouter_key:
+            raise RuntimeError("OpenRouter AI ကို ရွေးထားပါသဖြင့် OpenRouter API Key ထည့်ပေးပါ။")
+        if translate_provider == "gemini" and not gemini_key:
+            raise RuntimeError("Gemini API ကို ရွေးထားပါသဖြင့် Gemini API Key ထည့်ပေးပါ။")
 
         orig_w, orig_h = await asyncio.to_thread(get_video_dimensions, video_path)
         total_video_dur = await asyncio.to_thread(get_duration, video_path)
@@ -790,27 +965,39 @@ async def process_recap_pipeline(
         if JOBS.get(job_id, {}).get("status") == "cancelled":
             return
 
-        # 2. Upload & 3. Transcribe
-        segments = await groq_whisper_transcribe(
-            extracted_audio,
-            groq_key,
-            cfg.get("source_language", "Auto-detect"),
-            job_id,
-            total_video_dur,
-            mode,
-        )
+        # 2. Upload & 3. Transcribe (Strictly uses user's chosen provider)
+        if transcribe_provider == "assemblyai":
+            segments = await assemblyai_transcribe(
+                extracted_audio,
+                aai_key,
+                cfg.get("source_language", "Auto-detect"),
+                job_id,
+                total_video_dur,
+                mode,
+            )
+        else:
+            segments = await groq_whisper_transcribe(
+                extracted_audio,
+                groq_key,
+                cfg.get("source_language", "Auto-detect"),
+                job_id,
+                total_video_dur,
+                mode,
+            )
 
         if JOBS.get(job_id, {}).get("status") == "cancelled":
             return
 
-        # 4. Translate / Storytelling Script
+        # 4. Translate / Storytelling Script (Strictly uses user's chosen provider)
         update_job_step(job_id, "translate", 38, "ဘာသာပြန်နေပါတယ်")
-        recap_data = await gemini_generate_recap(
+        recap_data = await translate_segments_with_provider(
             job_id=job_id,
             segments=segments,
+            translate_provider=translate_provider,
             gemini_key=gemini_key,
-            groq_key=groq_key,
             gemini_model=gemini_model,
+            openrouter_key=openrouter_key,
+            openrouter_model=openrouter_model,
             mode=mode,
             output_lang=cfg.get("output_language", "မြန်မာ"),
             want_hashtags=cfg.get("ai_hashtags", False),
