@@ -735,7 +735,7 @@ STRICT BURMESE RULES:
                 or_model = (openrouter_model or DEFAULT_OPENROUTER_MODEL).strip()
                 or_fallback_models = [
                     or_model,
-                    "google/gemini-2.0-flash-001",
+                    "google/gemini-3.8-flash-001",
                     "deepseek/deepseek-chat-v3-0324:free",
                     "meta-llama/llama-3.3-70b-instruct:free",
                 ]
@@ -1038,20 +1038,41 @@ async def process_recap_pipeline(
                     return
                 raw_tts = job_dir / f"raw_tts_{seg_item['index']:04d}.mp3"
                 trim_tts = job_dir / f"tts_{seg_item['index']:04d}.mp3"
-                comm = edge_tts.Communicate(seg_item["narration"], voice_id, rate=rate_str, pitch=pitch_str)
-                await comm.save(str(raw_tts))
-                await asyncio.to_thread(
-                    run_cmd,
-                    [
-                        "ffmpeg", "-y", "-threads", "1", "-i", str(raw_tts),
-                        "-af", "silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.08:start_threshold=-45dB,areverse",
-                        "-ar", "24000", "-ac", "1", "-b:a", "96k",
-                        str(trim_tts),
-                    ],
-                )
+                
+                narr_text = (seg_item.get("narration") or "").strip()
+                if not narr_text:
+                    narr_text = "..."
+
+                try:
+                    comm = edge_tts.Communicate(narr_text, voice_id, rate=rate_str, pitch=pitch_str)
+                    await comm.save(str(raw_tts))
+                    
+                    if raw_tts.exists() and raw_tts.stat().st_size > 300:
+                        await asyncio.to_thread(
+                            run_cmd,
+                            [
+                                "ffmpeg", "-y", "-threads", "1", "-i", str(raw_tts),
+                                "-af", "silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.08:start_threshold=-45dB,areverse",
+                                "-ar", "24000", "-ac", "1", "-b:a", "96k",
+                                str(trim_tts),
+                            ],
+                        )
+                    else:
+                        raise RuntimeError("Empty TTS audio generated")
+                except Exception:
+                    # TTS Error ဖြစ်ပါက Silence အသံဖိုင် အစားထိုးပေးခြင်းဖြင့် Error လုံးဝမတက်စေရန်
+                    await asyncio.to_thread(
+                        run_cmd,
+                        [
+                            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                            "-t", "0.8", "-b:a", "96k", str(trim_tts),
+                        ],
+                    )
+
                 raw_tts.unlink(missing_ok=True)
                 seg_item["tts_file"] = trim_tts
-                seg_item["tts_duration"] = max(0.35, await asyncio.to_thread(get_duration, trim_tts))
+                seg_item["tts_duration"] = max(0.4, await asyncio.to_thread(get_duration, trim_tts))
+
 
         await asyncio.gather(*(generate_single_tts(s) for s in segments))
         append_job_log(job_id, "ပြီးပါပြီ")
