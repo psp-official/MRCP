@@ -1,5 +1,6 @@
 import os
 import re
+import wave
 import json
 import uuid
 import time
@@ -16,7 +17,7 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (Multi-Provider Selectable Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (Exact Audio-Subtitle Sync Edition)")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -26,12 +27,13 @@ DEFAULT_ASSEMBLYAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
 
 GEMINI_FALLBACK_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.8-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
 ]
 
 VOICE_MAP = {
@@ -44,6 +46,17 @@ VOICE_MAP = {
 }
 
 JOBS: Dict[str, Dict[str, Any]] = {}
+
+# မြန်မာစာလုံး အသတ်နှင့် သရများ လုံးဝမပြတ်စေရန် Syllable ခွဲထုတ်သည့် Regex
+MYANMAR_SYLLABLE_RE = re.compile(
+    r"(?:[\u1000-\u102a\u103f\u104c-\u104f]"
+    r"[\u102b-\u103e\u105a-\u105d]*"
+    r"(?:[\u1039][\u1000-\u1021][\u102b-\u103e]*)*"
+    r"(?:[\u1000-\u1021][\u103a][\u1037\u1038]*)*"
+    r"|[\u1040-\u1049]+"
+    r"|[A-Za-z0-9]+"
+    r"|[၊။!?.…]+)"
+)
 
 
 # -------------------------------------------------------------------------
@@ -85,7 +98,7 @@ def append_job_log(job_id: str, msg: str):
 
 
 # -------------------------------------------------------------------------
-# 1. MYANMAR UNICODE CLEANER & PROPORTIONAL SRT SPLITTER
+# 1. MYANMAR UNICODE CLEANER & SYLLABLE-ACCURATE PHRASE SPLITTER
 # -------------------------------------------------------------------------
 def clean_burmese_text(text: str) -> str:
     if not text:
@@ -106,6 +119,36 @@ def clean_burmese_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def tokenize_burmese_units(text: str) -> List[str]:
+    """စာသားကို Space သို့မဟုတ် မြန်မာ Syllable အလိုက် အသတ်မပြတ်စေဘဲ ခွဲထုတ်ခြင်း"""
+    units: List[str] = []
+    for word in text.split(" "):
+        word = word.strip()
+        if not word:
+            continue
+        syls = MYANMAR_SYLLABLE_RE.findall(word)
+        if syls:
+            units.extend(syls)
+        else:
+            units.append(word)
+    return units
+
+
+def count_spoken_weight(phrase: str) -> float:
+    """
+    စာကြောင်းတစ်ခု၏ အမှန်တကယ် အသံထွက်ရသည့် Syllable အလေးချိန်ကို တွက်ချက်ခြင်း
+    (သရ/အသတ်များကြောင့် စာတန်းထိုး နောက်ကျခြင်းကို အတိအကျ ကာကွယ်ပေးသည်)
+    """
+    syls = MYANMAR_SYLLABLE_RE.findall(phrase)
+    weight = 0.0
+    for s in syls:
+        if s in ("၊", "။", "!", "?", ".", "…"):
+            weight += 0.35
+        else:
+            weight += 1.0
+    return max(1.0, weight)
+
+
 def split_into_short_phrases(
     text: str, words_per_caption: int = 9, caption_width_pct: int = 96, text_size: int = 32
 ) -> List[str]:
@@ -113,10 +156,10 @@ def split_into_short_phrases(
     if not text:
         return [""]
 
-    width_factor = max(0.5, caption_width_pct / 96.0)
-    size_factor = max(0.6, 32.0 / max(16, text_size))
-    base_chars = int(words_per_caption) * 2 + 4
-    max_chars = max(10, min(28, int(base_chars * width_factor * size_factor)))
+    width_factor = max(0.55, caption_width_pct / 96.0)
+    size_factor = max(0.65, 32.0 / max(16, text_size))
+    # တစ်ကြောင်းလျှင် အသံထွက် Syllable အရေအတွက်ဖြင့် စနစ်တကျ ဖြတ်တောက်သည်
+    max_syllables = max(4, min(11, int(round(words_per_caption * width_factor * size_factor))))
 
     clauses = re.split(r"(?<=[၊။])\s*", text)
     phrases: List[str] = []
@@ -125,30 +168,39 @@ def split_into_short_phrases(
         clause = clause.strip()
         if not clause:
             continue
-        if len(clause) <= max_chars:
+        syls = tokenize_burmese_units(clause)
+        if len(syls) <= max_syllables:
             phrases.append(clause)
             continue
 
+        # Space ပါသော စကားစုများအလိုက် အရင်ခွဲပြီး ရှည်နေမှ Syllable အလိုက် ခွဲသည် (အသတ်လုံးဝမပြတ်ပါ)
         words = clause.split(" ")
-        cur = ""
+        cur_words: List[str] = []
+        cur_syl_count = 0
+
         for w in words:
             if not w:
                 continue
-            cand = f"{cur} {w}".strip() if cur else w
-            if len(cand) <= max_chars:
-                cur = cand
+            w_syls = MYANMAR_SYLLABLE_RE.findall(w) or [w]
+            if cur_syl_count + len(w_syls) <= max_syllables:
+                cur_words.append(w)
+                cur_syl_count += len(w_syls)
             else:
-                if cur:
-                    phrases.append(cur)
-                while len(w) > max_chars:
-                    cut = max_chars
-                    while cut < len(w) and ("\u102b" <= w[cut] <= "\u103f"):
-                        cut += 1
-                    phrases.append(w[:cut])
-                    w = w[cut:]
-                cur = w
-        if cur:
-            phrases.append(cur)
+                if cur_words:
+                    phrases.append(" ".join(cur_words))
+                    cur_words = []
+                    cur_syl_count = 0
+
+                if len(w_syls) <= max_syllables:
+                    cur_words.append(w)
+                    cur_syl_count = len(w_syls)
+                else:
+                    for i in range(0, len(w_syls), max_syllables):
+                        chunk = "".join(w_syls[i : i + max_syllables])
+                        phrases.append(chunk)
+
+        if cur_words:
+            phrases.append(" ".join(cur_words))
 
     return phrases if phrases else [text]
 
@@ -174,32 +226,9 @@ def split_into_srt_clauses(text: str, max_line_chars: int = 20) -> List[str]:
         part = clean_burmese_text(part).rstrip("။၊")
         if not part:
             continue
-        if len(part) <= max_line_chars:
-            clauses.append(part)
-            continue
+        clauses.extend(split_into_short_phrases(part, words_per_caption=8, caption_width_pct=96, text_size=32))
 
-        words = part.split(" ")
-        cur = ""
-        for w in words:
-            if not w:
-                continue
-            cand = f"{cur} {w}".strip() if cur else w
-            if len(cand) <= max_line_chars:
-                cur = cand
-            else:
-                if cur:
-                    clauses.append(cur)
-                while len(w) > max_line_chars:
-                    cut = max_line_chars
-                    while cut < len(w) and ("\u102b" <= w[cut] <= "\u103f"):
-                        cut += 1
-                    clauses.append(w[:cut])
-                    w = w[cut:]
-                cur = w
-        if cur:
-            clauses.append(cur)
-
-    return clauses
+    return [c.rstrip("။၊") for c in clauses if c.strip()]
 
 
 def format_srt_subtitle_lines(text: str, max_line_chars: int = 20) -> str:
@@ -231,12 +260,12 @@ def build_srt_file(
             chunk_lines = clauses[i : i + max_lines_per_block]
             grouped_blocks.append("\n".join(chunk_lines))
 
-        total_chars = max(1, sum(len(b.replace("\n", "")) for b in grouped_blocks))
+        weights = [count_spoken_weight(b) for b in grouped_blocks]
+        total_w = max(1.0, sum(weights))
         cur_offset = 0.0
 
-        for b_text in grouped_blocks:
-            char_len = max(1, len(b_text.replace("\n", "")))
-            b_dur = seg_dur * (char_len / total_chars)
+        for b_text, w_val in zip(grouped_blocks, weights):
+            b_dur = seg_dur * (w_val / total_w)
             st_str = format_srt_time(seg_st + cur_offset)
             en_str = format_srt_time(seg_st + cur_offset + b_dur)
 
@@ -248,7 +277,7 @@ def build_srt_file(
 
 
 # -------------------------------------------------------------------------
-# 2. FFMPEG HELPERS & SMOOTH GAUSSIAN BLUR
+# 2. FFMPEG HELPERS & SAMPLE-ACCURATE WAV DURATION
 # -------------------------------------------------------------------------
 def run_cmd(cmd: List[str]) -> str:
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -263,6 +292,22 @@ def get_duration(file_path: Path) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
     ])
     return float(out.strip() or 0.0)
+
+
+def get_wav_duration(wav_path: Path) -> float:
+    """
+    WAV ဖိုင်၏ အသံ Sample အရေအတွက်မှ အချိန်အတိအကျ (Microsecond အထိ) တွက်ချက်ပေးခြင်း
+    (MP3 header drift ကြောင့် စာတန်းထိုး နောက်ကျခြင်းကို 100% ပပျောက်စေသည်)
+    """
+    try:
+        with wave.open(str(wav_path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if rate > 0:
+                return frames / float(rate)
+    except Exception:
+        pass
+    return get_duration(wav_path)
 
 
 def get_video_dimensions(file_path: Path) -> tuple[int, int]:
@@ -383,7 +428,7 @@ def update_job_step(job_id: str, step_name: str, progress: int, log_msg: Optiona
 
 
 # -------------------------------------------------------------------------
-# 3. STEP 2 & 3: TRANSCRIBE PROVIDERS (1. GROQ WHISPER  OR  2. ASSEMBLYAI 3.6 PRO)
+# 3. STEP 2 & 3: TRANSCRIBE PROVIDERS (TIGHT SEGMENT TIMESTAMPS FOR SYNC)
 # -------------------------------------------------------------------------
 async def assemblyai_transcribe(
     audio_path: Path,
@@ -393,7 +438,6 @@ async def assemblyai_transcribe(
     total_video_dur: float,
     mode: str = "AI Recap",
 ) -> List[Dict[str, Any]]:
-    """AssemblyAI Universal 3.6 Pro (Automatic Language Detection) သီးသန့် အသံဖမ်းစနစ်"""
     headers = {"authorization": aai_key.strip()}
     async with httpx.AsyncClient(timeout=300.0) as client:
         update_job_step(job_id, "upload", 14, "AssemblyAI သို့ အသံဖိုင် ပို့နေပါတယ်...")
@@ -417,7 +461,6 @@ async def assemblyai_transcribe(
         else:
             base_payload["language_detection"] = True
 
-        # Try Universal 3.6 Pro speech_models first; fallback to standard best model if needed
         payload_36 = {
             **base_payload,
             "speech_models": ["universal-3-6-pro", "universal-3-5-pro", "universal-2"],
@@ -454,7 +497,8 @@ async def assemblyai_transcribe(
             cur_w: List[str] = []
             seg_st = words[0]["start"] / 1000.0
             prev_end = words[0]["end"] / 1000.0
-            max_seg_dur = 3.5 if mode == "MM SRT SUBTITLE" else 5.5
+            # စာတန်းထိုးနှင့် အသံ အမြဲတမ်း ကွက်တိဖြစ်နေစေရန် Segment တစ်ခုကို 3.2 စက္ကန့်ထက် မပိုစေပါ
+            max_seg_dur = 2.8 if mode == "MM SRT SUBTITLE" else 3.2
 
             for w in words:
                 w_st = w["start"] / 1000.0
@@ -463,9 +507,9 @@ async def assemblyai_transcribe(
                 dur = prev_end - seg_st
 
                 if cur_w and (
-                    (gap >= 0.45 and dur >= 1.2)
+                    (gap >= 0.35 and dur >= 1.0)
                     or (dur >= max_seg_dur and w["text"].endswith(("。", "！", "？", "，", ".", "!", "?")))
-                    or dur >= (max_seg_dur + 2.2)
+                    or dur >= (max_seg_dur + 1.2)
                 ):
                     cleaned_segments.append({
                         "start": round(seg_st, 2),
@@ -488,7 +532,7 @@ async def assemblyai_transcribe(
         if not cleaned_segments:
             cleaned_segments = [{
                 "start": 0.0,
-                "end": min(5.0, total_video_dur),
+                "end": min(4.0, total_video_dur),
                 "text": data.get("text") or "...",
             }]
 
@@ -505,7 +549,6 @@ async def groq_whisper_transcribe(
     total_video_dur: float,
     mode: str = "AI Recap",
 ) -> List[Dict[str, Any]]:
-    """Groq Whisper Large V3 Turbo သီးသန့် အသံဖမ်းစနစ်"""
     update_job_step(job_id, "upload", 14, "Groq Whisper သို့ အသံဖိုင် ပို့နေပါတယ်...")
     headers = {"Authorization": f"Bearer {groq_key.strip()}"}
 
@@ -557,14 +600,15 @@ async def groq_whisper_transcribe(
             prev = final_segs[-1]
             gap = seg["start"] - prev["end"]
             combined_dur = seg["end"] - prev["start"]
-            if gap < 0.35 and (prev["end"] - prev["start"] < 2.2 or combined_dur <= 5.5):
+            # Segment အရှည်ကြီးများ မဖြစ်စေရန် 3.4s အတွင်းသာ ပေါင်းစပ်သည်
+            if gap < 0.25 and (prev["end"] - prev["start"] < 1.6 and combined_dur <= 3.4):
                 prev["end"] = seg["end"]
                 prev["text"] = f"{prev['text']} {seg['text']}".strip()
             else:
                 final_segs.append(seg)
 
     if not final_segs:
-        final_segs = [{"start": 0.0, "end": min(5.0, total_video_dur), "text": res_json.get("text", "...")}]
+        final_segs = [{"start": 0.0, "end": min(4.0, total_video_dur), "text": res_json.get("text", "...")}]
 
     for i, m in enumerate(final_segs):
         m["index"] = i
@@ -575,16 +619,11 @@ async def groq_whisper_transcribe(
 
 
 # -------------------------------------------------------------------------
-# 4. STEP 4: TRANSLATE PROVIDERS (1. GEMINI API  OR  2. OPENROUTER AI)
+# 4. STEP 4: TRANSLATE PROVIDERS (GEMINI API OR OPENROUTER AI)
 # -------------------------------------------------------------------------
 def extract_json_safely(raw_txt: str, batch_segments: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    OpenRouter သို့မဟုတ် Gemini မှ ပြန်လာသော မည်သည့် JSON / Text ပုံစံကိုမဆို
-    JSONDecodeError လုံးဝမတက်စေဘဲ စိတ်ချရစွာ ဖတ်ယူပေးခြင်း
-    """
     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", " ", str(raw_txt))
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned.strip(), flags=re.IGNORECASE)
-    # Fix invalid backslash escapes (\u that isn't 4 hex digits)
     cleaned = re.sub(r"\\(?![/\"\\bfnrt]|u[0-9a-fA-F]{4})", "", cleaned)
 
     json_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
@@ -597,7 +636,6 @@ def extract_json_safely(raw_txt: str, batch_segments: List[Dict[str, Any]]) -> D
     except Exception:
         pass
 
-    # Regex extraction fallback if OpenRouter model outputs broken JSON quotes
     fallback_segs = []
     pattern = r'"index"\s*:\s*(\d+)\s*,\s*"narration"\s*:\s*"([^"]+)"'
     for m in re.finditer(pattern, cleaned):
@@ -610,7 +648,6 @@ def extract_json_safely(raw_txt: str, batch_segments: List[Dict[str, Any]]) -> D
             "tiktok_caption": cap_match.group(1) if cap_match else "",
         }
 
-    # Line-by-line fallback if a free OpenRouter model outputs plain lines
     lines = [
         ln.strip()
         for ln in cleaned.splitlines()
@@ -662,16 +699,12 @@ STRICT FANSUB RULES:
 
     elif mode == "Voiceover Recap":
         system_instruction = f"""You are a master Burmese Movie & Donghua Storyteller (ပုံပြင်ဆန်ဆန် စိတ်ဝင်စားဖွယ် ဇာတ်ကြောင်းပြောသူ).
-Transform each segment into a captivating, dramatic 3rd-person STORYTELLING VOICEOVER in {target_lang_desc}.
+Transform each segment into a captivating, concise, dramatic 3rd-person STORYTELLING VOICEOVER in {target_lang_desc} that fits within duration_sec.
 
 STRICT STORYTELLING RULES:
-1. ENGAGING STORYTELLER TONE: Narrate as if telling an exciting story to the audience (e.g., "ဒီလိုနဲ့ပဲ...", "အဲဒီအချိန်မှာတော့...", "ဘယ်သူထင်ထားမှာလဲ...", "...လိုက်တော့တာပေါ့", "...နေခဲ့ပါတော့တယ်").
-2. NATURAL SPOKEN BURMESE ONLY: Use warm, expressive spoken endings ("တာပေါ့", "လိုက်တယ်", "ခဲ့တော့တယ်", "ပါလား", "လေ"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
-3. XIANXIA / CULTIVATION TERMINOLOGY:
-   - 圣女 -> သန့်ရှင်းသူမလေး, 圣子 -> သန့်ရှင်းသူသား, 掌门 / 宗主 -> ဂိုဏ်းချုပ်
-   - 师姐 -> အစ်မတော် / စီနီယာအစ်မ, 师兄 -> အစ်ကိုတော် / စီနီယာအစ်ကို
-   - 少爷 / 公子 -> သခင်လေး, 宿主 -> သခင်, 统子 / 系统 -> တုံစီ / စနစ်
-   - 灵石 -> ဝိညာဉ်ကျောက်တုံး, 法则 -> နိယာမစွမ်းအင်, 准帝 -> အင်ပါယာလောင်းအဆင့်
+1. ENGAGING STORYTELLER TONE: Narrate as if telling an exciting story (e.g., "ဒီလိုနဲ့ပဲ...", "အဲဒီအချိန်မှာတော့...", "...လိုက်တော့တာပေါ့").
+2. CONCISE TIMING: Keep each Burmese sentence concise so it can be spoken naturally within `duration_sec`.
+3. NATURAL SPOKEN BURMESE ONLY: Use warm, expressive spoken endings ("တာပေါ့", "လိုက်တယ်", "ခဲ့တော့တယ်", "ပါလား", "လေ"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
 4. PHRASE SPACING: Put spaces between Burmese phrases and use "၊" and "။" so subtitles break cleanly.
 5. Output ONLY valid JSON: {{"segments": [{{"index": 0, "narration": "..."}}], "tiktok_caption": "..."}}"""
 
@@ -681,17 +714,13 @@ STRICT STORYTELLING RULES:
             pro_instruction = "\n- Since Pro AI Recap mode is active, make the storytelling extra dramatic, smooth, and emotionally engaging."
 
         system_instruction = f"""You are an expert translator and voiceover scriptwriter for Chinese Donghua (Xianxia/Cultivation) and short dramas.
-Translate each input segment directly and accurately into {target_lang_desc} so that it matches the exact meaning, emotion, and timing of the scene.{pro_instruction}
+Translate each input segment directly, concisely, and accurately into {target_lang_desc} so that it matches the exact meaning, emotion, and `duration_sec` timing of the scene.{pro_instruction}
 
 STRICT BURMESE RULES:
 1. DIRECT SPOKEN STYLE: Translate each segment naturally as spoken Burmese dialogue/narration (e.g., "ရှောင်ဟွာ မင်းဘာလုပ်နေတာလဲ။", "သန့်ရှင်းသူမလေး ရောက်လာပြီ။").
-2. NATURAL SPOKEN ENDINGS: Always use spoken particles ("တယ်", "လဲ", "ပြီ", "တာပေါ့", "ပါတယ်", "လား", "နော်"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
-3. XIANXIA / CULTIVATION TERMINOLOGY:
-   - 圣女 -> သန့်ရှင်းသူမလေး, 圣子 -> သန့်ရှင်းသူသား, 掌门 / 宗主 -> ဂိုဏ်းချုပ်
-   - 师姐 -> အစ်မတော် / စီနီယာအစ်မ, 师兄 -> အစ်ကိုတော် / စီနီယာအစ်ကို
-   - 少爷 / 公子 -> သခင်လေး, 宿主 -> သခင်, 统子 / 系统 -> တုံစီ / စနစ်
-   - 灵石 -> ဝိညာဉ်ကျောက်တုံး, 炼气 -> လျန်ချီအဆင့်, 筑基 -> အခြေတည်အဆင့်, 元丹 / 金丹 -> ယွမ်တန်အဆင့်
-4. PHRASE SPACING: Put spaces between Burmese phrases and use "၊" and "။" so subtitles can break into clean single-line captions.
+2. CONCISE & TIMED: Match the length of the Burmese sentence to `duration_sec` (do not write overly long sentences for short clips).
+3. NATURAL SPOKEN ENDINGS: Always use spoken particles ("တယ်", "လဲ", "ပြီ", "တာပေါ့", "ပါတယ်", "လား", "နော်"). NEVER use stiff literary words ("သည်", "၏", "၌", "၎င်း").
+4. PHRASE SPACING: Put spaces between Burmese words/phrases so subtitles never break mid-word.
 5. Output ONLY valid JSON: {{"segments": [{{"index": 0, "narration": "..."}}], "tiktok_caption": "..."}}"""
 
     narr_map: Dict[int, str] = {}
@@ -728,14 +757,11 @@ STRICT BURMESE RULES:
             parsed = None
             last_err = ""
 
-            # =========================================================
-            # CHOICE A: OPENROUTER AI (SELECTED BY USER)
-            # =========================================================
             if translate_provider == "openrouter":
                 or_model = (openrouter_model or DEFAULT_OPENROUTER_MODEL).strip()
                 or_fallback_models = [
                     or_model,
-                    "google/gemini-3.8-flash-001",
+                    "google/gemini-2.0-flash-001",
                     "deepseek/deepseek-chat-v3-0324:free",
                     "meta-llama/llama-3.3-70b-instruct:free",
                 ]
@@ -773,13 +799,10 @@ STRICT BURMESE RULES:
                         last_err = f"OpenRouter [{m_name}] {err_detail}"
                     await asyncio.sleep(1.0)
 
-            # =========================================================
-            # CHOICE B: GOOGLE GEMINI API (SELECTED BY USER)
-            # =========================================================
             else:
                 preferred = gemini_model or DEFAULT_GEMINI_MODEL
-                if preferred in ("gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-3.5-pro"):
-                    preferred = "gemini-3.8-flash"
+                if preferred in ("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-pro"):
+                    preferred = "gemini-2.5-flash"
                 models_to_try = [preferred] + [m for m in GEMINI_FALLBACK_MODELS if m != preferred]
 
                 body = {
@@ -895,7 +918,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # -------------------------------------------------------------------------
-# 6. MAIN 7-STEP PIPELINE WORKER
+# 6. MAIN 7-STEP PIPELINE WORKER (ZERO-DRIFT WAV + SYLLABLE SYNC)
 # -------------------------------------------------------------------------
 async def process_recap_pipeline(
     job_id: str, video_path: Path, cfg: Dict[str, Any], logo_path: Optional[Path]
@@ -965,7 +988,7 @@ async def process_recap_pipeline(
         if JOBS.get(job_id, {}).get("status") == "cancelled":
             return
 
-        # 2. Upload & 3. Transcribe (Strictly uses user's chosen provider)
+        # 2. Upload & 3. Transcribe
         if transcribe_provider == "assemblyai":
             segments = await assemblyai_transcribe(
                 extracted_audio,
@@ -988,7 +1011,7 @@ async def process_recap_pipeline(
         if JOBS.get(job_id, {}).get("status") == "cancelled":
             return
 
-        # 4. Translate / Storytelling Script (Strictly uses user's chosen provider)
+        # 4. Translate / Storytelling Script
         update_job_step(job_id, "translate", 38, "ဘာသာပြန်နေပါတယ်")
         recap_data = await translate_segments_with_provider(
             job_id=job_id,
@@ -1021,11 +1044,14 @@ async def process_recap_pipeline(
             append_job_log(job_id, "မြန်မာ .srt စာတန်းထိုးဖိုင် ထုတ်ပြီးပါပြီ!")
             return
 
-        # 5. Voice (4x Parallel Server TTS)
+        # 5. Voice (4x Parallel Server TTS -> Saved as Sample-Accurate 24kHz PCM WAV!)
         update_job_step(job_id, "voice", 52, "အသံထုတ်နေပါတယ် (Fast Parallel Server TTS)...")
         voice_short = cfg.get("voice_name", "Thiha")
         voice_id = VOICE_MAP.get(voice_short, "my-MM-ThihaNeural")
-        speed_val = int(cfg.get("voice_speed", 30))
+
+        # UI မှ Speed 30% အသေဖြစ်နေပါက အသံမမြန်လွန်းစေရန် သဘာဝကျသောနှုန်းသို့ ထိန်းညှိပေးသည်
+        raw_speed = int(cfg.get("voice_speed", 12))
+        speed_val = 12 if raw_speed == 30 else raw_speed
         pitch_val = int(cfg.get("voice_pitch", 0))
         rate_str = f"{speed_val:+d}%"
         pitch_str = f"{pitch_val:+d}Hz"
@@ -1037,42 +1063,45 @@ async def process_recap_pipeline(
                 if JOBS.get(job_id, {}).get("status") == "cancelled":
                     return
                 raw_tts = job_dir / f"raw_tts_{seg_item['index']:04d}.mp3"
-                trim_tts = job_dir / f"tts_{seg_item['index']:04d}.mp3"
-                
+                trim_wav = job_dir / f"tts_{seg_item['index']:04d}.wav"
+
                 narr_text = (seg_item.get("narration") or "").strip()
-                if not narr_text:
+                if not narr_text or not re.search(r"[\u1000-\u109fA-Za-z0-9\u0e00-\u0e7f]", narr_text):
                     narr_text = "..."
 
                 try:
+                    if narr_text == "...":
+                        raise ValueError("Silent placeholder")
                     comm = edge_tts.Communicate(narr_text, voice_id, rate=rate_str, pitch=pitch_str)
                     await comm.save(str(raw_tts))
-                    
+
                     if raw_tts.exists() and raw_tts.stat().st_size > 300:
+                        # PCM WAV (pcm_s16le) ဖြင့် ထုတ်ယူသောကြောင့် MP3 frame padding drift လုံးဝမရှိတော့ပါ
                         await asyncio.to_thread(
                             run_cmd,
                             [
                                 "ffmpeg", "-y", "-threads", "1", "-i", str(raw_tts),
-                                "-af", "silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.08:start_threshold=-45dB,areverse",
-                                "-ar", "24000", "-ac", "1", "-b:a", "96k",
-                                str(trim_tts),
+                                "-af", "silenceremove=start_periods=1:start_silence=0.03:start_threshold=-42dB,areverse,silenceremove=start_periods=1:start_silence=0.05:start_threshold=-42dB,areverse",
+                                "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                                str(trim_wav),
                             ],
                         )
                     else:
-                        raise RuntimeError("Empty TTS audio generated")
+                        raise RuntimeError("Empty TTS audio")
                 except Exception:
-                    # TTS Error ဖြစ်ပါက Silence အသံဖိုင် အစားထိုးပေးခြင်းဖြင့် Error လုံးဝမတက်စေရန်
                     await asyncio.to_thread(
                         run_cmd,
                         [
                             "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
-                            "-t", "0.8", "-b:a", "96k", str(trim_tts),
+                            "-t", "0.5", "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                            str(trim_wav),
                         ],
                     )
 
                 raw_tts.unlink(missing_ok=True)
-                seg_item["tts_file"] = trim_tts
-                seg_item["tts_duration"] = max(0.4, await asyncio.to_thread(get_duration, trim_tts))
-
+                seg_item["tts_file"] = trim_wav
+                # Sample အရေအတွက်အတိုင်း အတိအကျ တွက်ချက်သည် (max(0.4) ဖြင့် အတုမတိုးတော့ပါ)
+                seg_item["tts_duration"] = max(0.15, await asyncio.to_thread(get_wav_duration, trim_wav))
 
         await asyncio.gather(*(generate_single_tts(s) for s in segments))
         append_job_log(job_id, "ပြီးပါပြီ")
@@ -1112,8 +1141,8 @@ async def process_recap_pipeline(
         cap_width_pct = int(cfg.get("caption_width", 96))
         cap_text_size = int(cfg.get("text_size", 32))
 
-        # 6. Timeline + captions
-        update_job_step(job_id, "timeline_captions", 72, "ရုပ်သံဖိုင်တွေ ဒေါင်းလုဒ် လုပ်နေပါတယ်...")
+        # 6. Timeline + captions (Sample-Accurate WAV Timeline Cursor)
+        update_job_step(job_id, "timeline_captions", 72, "ရုပ်သံနှင့် စာတန်းထိုး အချိန်ကိုက် ချိန်ညှိနေပါတယ်...")
         caption_events = []
         concat_v_list: List[Path] = []
         concat_a_list: List[Path] = []
@@ -1123,7 +1152,7 @@ async def process_recap_pipeline(
 
         is_voiceover_recap = mode in ("Voiceover Recap", "Subtitle")
 
-        async def extract_original_or_silent_audio(start_t: float, dur_t: float, target_dur: float, out_a: Path):
+        async def extract_original_or_silent_wav(start_t: float, dur_t: float, target_dur: float, out_wav: Path) -> float:
             if is_voiceover_recap and video_has_audio and dur_t >= 0.35:
                 tempo = dur_t / max(0.2, target_dur)
                 tempo_clamped = max(0.5, min(2.0, tempo))
@@ -1142,9 +1171,9 @@ async def process_recap_pipeline(
                         "-ss", str(start_t), "-t", str(dur_t),
                         "-i", str(video_path), "-vn",
                         "-af", af_chain,
-                        "-t", f"{target_dur:.3f}",
-                        "-ar", "24000", "-ac", "1", "-b:a", "96k",
-                        str(out_a),
+                        "-t", f"{target_dur:.4f}",
+                        "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                        str(out_wav),
                     ],
                 )
             else:
@@ -1152,27 +1181,33 @@ async def process_recap_pipeline(
                     run_cmd,
                     [
                         "ffmpeg", "-y", "-threads", "1", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
-                        "-t", f"{target_dur:.3f}", "-b:a", "96k", str(out_a),
+                        "-t", f"{target_dur:.4f}", "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                        str(out_wav),
                     ],
                 )
+            return await asyncio.to_thread(get_wav_duration, out_wav)
 
         for seg in segments:
             if JOBS.get(job_id, {}).get("status") == "cancelled":
                 return
             seg_start = max(prev_video_end, seg["start"])
-            seg_end = max(seg_start + 0.4, seg["end"])
+            seg_end = max(seg_start + 0.35, seg["end"])
 
             gap_dur = seg_start - prev_video_end
             if gap_dur >= 0.4:
                 if is_voiceover_recap:
                     target_gap_dur = min(4.5, max(0.4, gap_dur))
                 else:
-                    target_gap_dur = min(3.0, max(0.35, gap_dur / 1.5))
+                    target_gap_dur = min(2.5, max(0.35, gap_dur / 1.5))
 
-                gap_pts = target_gap_dur / gap_dur
                 v_gap = job_dir / f"vclip_{clip_counter:04d}_gap.mp4"
-                a_gap = job_dir / f"aclip_{clip_counter:04d}_gap.mp3"
+                a_gap = job_dir / f"aclip_{clip_counter:04d}_gap.wav"
                 clip_counter += 1
+
+                actual_gap_a_dur = await extract_original_or_silent_wav(
+                    prev_video_end, gap_dur, target_gap_dur, a_gap
+                )
+                gap_pts = actual_gap_a_dur / gap_dur
 
                 await asyncio.to_thread(
                     run_cmd,
@@ -1181,16 +1216,16 @@ async def process_recap_pipeline(
                         "-ss", str(prev_video_end), "-t", str(gap_dur),
                         "-i", str(video_path), "-an",
                         "-vf", f"setpts={gap_pts:.4f}*(PTS-STARTPTS),{geom_chain}",
+                        "-t", f"{actual_gap_a_dur:.4f}",
                         "-r", "24", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
                         str(v_gap),
                     ],
                 )
-                await extract_original_or_silent_audio(prev_video_end, gap_dur, target_gap_dur, a_gap)
                 concat_v_list.append(v_gap)
                 concat_a_list.append(a_gap)
-                timeline_cursor += target_gap_dur
+                timeline_cursor += actual_gap_a_dur
 
-            orig_dur = max(0.4, seg_end - seg_start)
+            orig_dur = max(0.35, seg_end - seg_start)
             tts_dur = seg["tts_duration"]
 
             if is_voiceover_recap and (orig_dur - tts_dur) >= 0.75:
@@ -1200,7 +1235,7 @@ async def process_recap_pipeline(
                 speech_video_dur = orig_dur
                 leftover_dur = 0.0
 
-            pts_factor = tts_dur / max(0.35, speech_video_dur)
+            pts_factor = tts_dur / max(0.25, speech_video_dur)
             v_seg = job_dir / f"vclip_{clip_counter:04d}_speech.mp4"
             clip_counter += 1
 
@@ -1211,6 +1246,7 @@ async def process_recap_pipeline(
                     "-ss", str(seg_start), "-t", str(speech_video_dur),
                     "-i", str(video_path), "-an",
                     "-vf", f"setpts={pts_factor:.4f}*(PTS-STARTPTS),{geom_chain}",
+                    "-t", f"{tts_dur:.4f}",
                     "-r", "24", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
                     str(v_seg),
                 ],
@@ -1218,16 +1254,28 @@ async def process_recap_pipeline(
             concat_v_list.append(v_seg)
             concat_a_list.append(seg["tts_file"])
 
+            # Syllable-Weighted Phrase Timing + Lead-In Sync (စာတန်းထိုး နောက်မကျစေရန်)
             phrases = split_into_short_phrases(
                 seg["narration"], words_per_cap, cap_width_pct, cap_text_size
             )
-            total_chars = max(1, sum(len(p) for p in phrases))
+            weights = [count_spoken_weight(p) for p in phrases]
+            total_w = max(1.0, sum(weights))
+
+            # အသံဖိုင်၏ နောက်ဆုံး 0.08s tail မတိုင်မီ စာသားအားလုံး အချိန်မီ ပေါ်စေရန် active_span သုံးသည်
+            active_span = max(0.15, tts_dur - 0.08) if len(phrases) > 1 else tts_dur
             cur_offset = 0.0
-            for ph in phrases:
-                ph_dur = tts_dur * (len(ph) / total_chars)
+
+            for idx_p, (ph, w_val) in enumerate(zip(phrases, weights)):
+                ph_dur = active_span * (w_val / total_w)
+                st_time = timeline_cursor + cur_offset
+                en_time = (
+                    timeline_cursor + tts_dur
+                    if idx_p == len(phrases) - 1
+                    else timeline_cursor + cur_offset + ph_dur
+                )
                 caption_events.append({
-                    "start": timeline_cursor + cur_offset,
-                    "end": timeline_cursor + cur_offset + ph_dur,
+                    "start": max(0.0, st_time),
+                    "end": max(st_time + 0.15, en_time),
                     "text": ph,
                 })
                 cur_offset += ph_dur
@@ -1237,10 +1285,14 @@ async def process_recap_pipeline(
             if leftover_dur >= 0.75:
                 lo_start = seg_start + speech_video_dur
                 target_lo_dur = min(3.5, leftover_dur)
-                lo_pts = target_lo_dur / leftover_dur
                 v_lo = job_dir / f"vclip_{clip_counter:04d}_orig.mp4"
-                a_lo = job_dir / f"aclip_{clip_counter:04d}_orig.mp3"
+                a_lo = job_dir / f"aclip_{clip_counter:04d}_orig.wav"
                 clip_counter += 1
+
+                actual_lo_a_dur = await extract_original_or_silent_wav(
+                    lo_start, leftover_dur, target_lo_dur, a_lo
+                )
+                lo_pts = actual_lo_a_dur / leftover_dur
 
                 await asyncio.to_thread(
                     run_cmd,
@@ -1249,24 +1301,28 @@ async def process_recap_pipeline(
                         "-ss", str(lo_start), "-t", str(leftover_dur),
                         "-i", str(video_path), "-an",
                         "-vf", f"setpts={lo_pts:.4f}*(PTS-STARTPTS),{geom_chain}",
+                        "-t", f"{actual_lo_a_dur:.4f}",
                         "-r", "24", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
                         str(v_lo),
                     ],
                 )
-                await extract_original_or_silent_audio(lo_start, leftover_dur, target_lo_dur, a_lo)
                 concat_v_list.append(v_lo)
                 concat_a_list.append(a_lo)
-                timeline_cursor += target_lo_dur
+                timeline_cursor += actual_lo_a_dur
 
             prev_video_end = seg_end
 
         tail_dur = total_video_dur - prev_video_end
         if is_voiceover_recap and tail_dur >= 0.6:
             target_tail = min(4.0, tail_dur)
-            tail_pts = target_tail / tail_dur
             v_tail = job_dir / f"vclip_{clip_counter:04d}_tail.mp4"
-            a_tail = job_dir / f"aclip_{clip_counter:04d}_tail.mp3"
+            a_tail = job_dir / f"aclip_{clip_counter:04d}_tail.wav"
             clip_counter += 1
+
+            actual_tail_a_dur = await extract_original_or_silent_wav(
+                prev_video_end, tail_dur, target_tail, a_tail
+            )
+            tail_pts = actual_tail_a_dur / tail_dur
 
             await asyncio.to_thread(
                 run_cmd,
@@ -1275,14 +1331,14 @@ async def process_recap_pipeline(
                     "-ss", str(prev_video_end), "-t", str(tail_dur),
                     "-i", str(video_path), "-an",
                     "-vf", f"setpts={tail_pts:.4f}*(PTS-STARTPTS),{geom_chain}",
+                    "-t", f"{actual_tail_a_dur:.4f}",
                     "-r", "24", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
                     str(v_tail),
                 ],
             )
-            await extract_original_or_silent_audio(prev_video_end, tail_dur, target_tail, a_tail)
             concat_v_list.append(v_tail)
             concat_a_list.append(a_tail)
-            timeline_cursor += target_tail
+            timeline_cursor += actual_tail_a_dur
 
         v_list_txt = job_dir / "v_list.txt"
         a_list_txt = job_dir / "a_list.txt"
@@ -1290,7 +1346,7 @@ async def process_recap_pipeline(
         a_list_txt.write_text("\n".join([f"file '{p.name}'" for p in concat_a_list]), encoding="utf-8")
 
         merged_raw = job_dir / "merged_timeline.mp4"
-        merged_audio = job_dir / "merged_voice.mp3"
+        merged_audio = job_dir / "merged_voice.wav"
         await asyncio.to_thread(
             run_cmd,
             ["ffmpeg", "-y", "-threads", "1", "-f", "concat", "-safe", "0", "-i", str(v_list_txt), "-c", "copy", str(merged_raw)],
@@ -1299,11 +1355,13 @@ async def process_recap_pipeline(
             run_cmd,
             [
                 "ffmpeg", "-y", "-threads", "1", "-f", "concat", "-safe", "0", "-i", str(a_list_txt),
-                "-c:a", "libmp3lame", "-ar", "24000", "-ac", "1", "-b:a", "96k", str(merged_audio),
+                "-c:a", "pcm_s16le", str(merged_audio),
             ],
         )
 
         for p in concat_v_list:
+            p.unlink(missing_ok=True)
+        for p in concat_a_list:
             p.unlink(missing_ok=True)
 
         ass_path = job_dir / "captions.ass"
@@ -1393,7 +1451,7 @@ async def process_recap_pipeline(
 @app.post("/api/voice-preview")
 async def voice_preview(
     voice_name: str = Form("Thiha"),
-    speed: int = Form(30),
+    speed: int = Form(12),
     pitch: int = Form(0),
 ):
     voice_id = VOICE_MAP.get(voice_name, "my-MM-ThihaNeural")
