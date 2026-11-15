@@ -1651,39 +1651,39 @@
     }
 
     async function triggerInstantAutoDownload(outputUrl, filename, jobId) {
-      if (autoDownloadedJobs.has(jobId)) return;
-      autoDownloadedJobs.add(jobId);
+      if (!outputUrl) return;
 
-      const isSrt = state.mode === "MM SRT SUBTITLE" || (outputUrl && outputUrl.endsWith(".srt"));
+      const isSrt = state.mode === "MM SRT SUBTITLE" || outputUrl.endsWith(".srt");
       const baseStem = (filename || "video").replace(/\.[^/.]+$/, "");
       const cleanName = isSrt ? `${baseStem}_MM.srt` : `Recap_${baseStem}.mp4`;
 
+      // 1. Download Video Again ခလုတ်ကို ချက်ချင်း နှိပ်၍ရအောင် တိုက်ရိုက်ချိတ်ဆက်ပေးခြင်း
       const dlBtn = document.getElementById("downloadVideoBtn");
       dlBtn.innerText = isSrt ? "⬇ Download .SRT Again" : "⬇ Download Video Again";
+      dlBtn.href = outputUrl;
+      dlBtn.setAttribute("download", cleanName);
+      dlBtn.setAttribute("target", "_blank");
 
-      try {
-        const response = await fetch(outputUrl);
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
+      // 2. Auto-Download ကို Browser Native Download Manager ဖြင့် တိုက်ရိုက် ချက်ချင်းဆွဲပေးခြင်း
+      if (autoDownloadedJobs.has(jobId)) return;
+      autoDownloadedJobs.add(jobId);
 
-        dlBtn.href = blobUrl;
-        dlBtn.download = cleanName;
+      const tempLink = document.createElement("a");
+      tempLink.href = outputUrl;
+      tempLink.setAttribute("download", cleanName);
+      tempLink.style.display = "none";
+      document.body.appendChild(tempLink);
+      tempLink.click();
+      document.body.removeChild(tempLink);
 
-        const tempLink = document.createElement("a");
-        tempLink.href = blobUrl;
-        tempLink.download = cleanName;
-        document.body.appendChild(tempLink);
-        tempLink.click();
-        document.body.removeChild(tempLink);
-      } catch (e) {
-        dlBtn.href = outputUrl;
-        dlBtn.download = cleanName;
-        window.location.href = outputUrl;
-      }
+      // Mobile Browser များတွင် သေချာပေါက် Download တန်းကျစေရန် Fallback
+      setTimeout(() => {
+        window.location.assign(outputUrl);
+      }, 400);
 
       if ("Notification" in window && Notification.permission === "granted") {
         new Notification("ထုတ်လုပ်ပြီးပါပြီ!", {
-          body: "သင့်ဖုန်းထဲသို့ အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။"
+          body: "သင့်ဖုန်းထဲသို့ အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲနေပါပြီ။"
         });
       }
     }
