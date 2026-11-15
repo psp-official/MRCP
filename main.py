@@ -16,20 +16,20 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-app = FastAPI(title="AI Movie Recap Narrator (Voiceover Recap & MM SRT Fixed Edition)")
+app = FastAPI(title="AI Movie Recap Narrator (Fast Translate & No-Timeout Edition)")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./recap_jobs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+# တရားဝင် အမြန်ဆုံး အလုပ်လုပ်သော Gemini Models စာရင်း
 GEMINI_FALLBACK_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
+    "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
 ]
 
 VOICE_MAP = {
@@ -83,7 +83,7 @@ def append_job_log(job_id: str, msg: str):
 
 
 # -------------------------------------------------------------------------
-# 1. MYANMAR UNICODE CLEANER & PROPORTIONAL SRT SPLITTER (FIXED)
+# 1. MYANMAR UNICODE CLEANER & PROPORTIONAL SRT SPLITTER
 # -------------------------------------------------------------------------
 def clean_burmese_text(text: str) -> str:
     if not text:
@@ -163,7 +163,6 @@ def format_srt_time(seconds: float) -> str:
 
 
 def split_into_srt_clauses(text: str, max_line_chars: int = 20) -> List[str]:
-    """SRT အတွက် စာကြောင်းရှည်များကို တစ်ကြောင်း ~20 လုံးစီ စနစ်တကျ ပိုင်းဖြတ်ပေးခြင်း"""
     if not text:
         return []
     raw_parts = re.split(r"[\n၊။]+", str(text))
@@ -212,7 +211,6 @@ def build_srt_file(
     max_lines_per_block: int = 1,
     max_line_chars: int = 22,
 ):
-    """စာကြောင်းရှည်များကို အချိန်အချိုးကျ ခွဲထုတ်ပြီး Standard UTF-8 .srt ဖိုင် တည်ဆောက်ခြင်း"""
     blocks = []
     srt_idx = 1
 
@@ -433,7 +431,6 @@ async def groq_whisper_transcribe(
         en = min(total_video_dur, max(st + 0.4, float(seg.get("end", st + 1.5))))
         cleaned_segments.append({"start": st, "end": en, "text": txt})
 
-    # MM SRT SUBTITLE တွင် စာကြောင်းတိုလေးများအတိုင်း အတိအကျထားသည်
     if mode == "MM SRT SUBTITLE":
         final_segs = cleaned_segments
     else:
@@ -463,11 +460,35 @@ async def groq_whisper_transcribe(
 
 
 # -------------------------------------------------------------------------
-# 4. STEP 4: GEMINI 3.8 NATIVE JSON TRANSLATION & STORYTELLING VOICEOVER
+# 4. STEP 4: FAST GEMINI + GROQ FALLBACK TRANSLATION (NO TIMEOUT!)
 # -------------------------------------------------------------------------
+def extract_json_safely(raw_txt: str) -> Dict[str, Any]:
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", " ", raw_txt)
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned.strip(), flags=re.IGNORECASE)
+    json_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    json_str = json_match.group(0) if json_match else cleaned.strip()
+
+    try:
+        return json.loads(json_str, strict=False)
+    except Exception:
+        fallback_segs = []
+        pattern = r'"index"\s*:\s*(\d+)\s*,\s*"narration"\s*:\s*"([^"]+)"'
+        for m in re.finditer(pattern, cleaned):
+            fallback_segs.append({"index": int(m.group(1)), "narration": m.group(2)})
+        cap_match = re.search(r'"tiktok_caption"\s*:\s*"([^"]+)"', cleaned)
+        if fallback_segs:
+            return {
+                "segments": fallback_segs,
+                "tiktok_caption": cap_match.group(1) if cap_match else "",
+            }
+        raise ValueError(f"Invalid JSON from model: {cleaned[:160]}")
+
+
 async def gemini_generate_recap(
+    job_id: str,
     segments: List[Dict[str, Any]],
     gemini_key: str,
+    groq_key: str,
     gemini_model: str,
     mode: str,
     output_lang: str,
@@ -489,13 +510,11 @@ Translate each input dialogue line into 100% natural, emotional {target_lang_des
 STRICT FANSUB RULES:
 1. CHARACTER DIALOGUE & PRONOUNS: Use natural context-appropriate pronouns ("ငါ", "မင်း", "ရှင်", "ရှင့်ရဲ့", "ညီမတော်", "သခင်လေး") and natural spoken endings ("ပါလား", "တော့", "တာလဲ", "ပြီပဲ!", "ပါဦး", "လိုက်တာ", "ရစေ").
 2. XIANXIA / CULTIVATION GLOSSARY:
-   - 法则之力 / 法则 -> နိယာမစွမ်းအင် / နိယာမတွေ
-   - 准帝 -> အင်ပါယာလောင်းအဆင့်, 大帝 -> မဟာအင်ပါယာအဆင့်
-   - 修为 / 境界 -> ကျင့်ကြံမှုအဆင့်, 威压 / 气息 -> ဖိအား / အရှိန်အဝါ
-   - 融合 -> ပေါင်းစည်းတယ်, 突破 -> အဆင့်တက်သွားပြီ
+   - 法则之力 / 法则 -> နိယာမစွမ်းအင် / နိယာမတွေ, 准帝 -> အင်ပါယာလောင်းအဆင့်, 大帝 -> မဟာအင်ပါယာအဆင့်
+   - 修为 / 境界 -> ကျင့်ကြံမှုအဆင့်, 威压 / 气息 -> ဖိအား / အရှိန်အဝါ, 融合 -> ပေါင်းစည်းတယ်, 突破 -> အဆင့်တက်သွားပြီ
    - 圣女 -> သန့်ရှင်းသူမလေး, 圣子 -> သန့်ရှင်းသူသား, 宗主 / 掌门 -> ဂိုဏ်းချုပ်, 灵石 -> ဝိညာဉ်ကျောက်တုံး
 3. SUBTITLE FORMATTING: Do NOT put "။" at the end of lines. Put spaces between phrases so lines break cleanly.
-4. Keep the exact same `index` for every segment."""
+4. Output ONLY valid JSON: {{"segments": [{{"index": 0, "narration": "..."}}], "tiktok_caption": "..."}}"""
 
     elif mode == "Voiceover Recap":
         system_instruction = f"""You are a master Burmese Movie & Donghua Storyteller (ပုံပြင်ဆန်ဆန် စိတ်ဝင်စားဖွယ် ဇာတ်ကြောင်းပြောသူ).
@@ -510,7 +529,7 @@ STRICT STORYTELLING RULES:
    - 少爷 / 公子 -> သခင်လေး, 宿主 -> သခင်, 统子 / 系统 -> တုံစီ / စနစ်
    - 灵石 -> ဝိညာဉ်ကျောက်တုံး, 法则 -> နိယာမစွမ်းအင်, 准帝 -> အင်ပါယာလောင်းအဆင့်
 4. PHRASE SPACING: Put spaces between Burmese phrases and use "၊" and "။" so subtitles break cleanly.
-5. Keep the exact same `index` for every segment."""
+5. Output ONLY valid JSON: {{"segments": [{{"index": 0, "narration": "..."}}], "tiktok_caption": "..."}}"""
 
     else:
         pro_instruction = ""
@@ -529,38 +548,35 @@ STRICT BURMESE RULES:
    - 少爷 / 公子 -> သခင်လေး, 宿主 -> သခင်, 统子 / 系统 -> တုံစီ / စနစ်
    - 灵石 -> ဝိညာဉ်ကျောက်တုံး, 炼气 -> လျန်ချီအဆင့်, 筑基 -> အခြေတည်အဆင့်, 元丹 / 金丹 -> ယွမ်တန်အဆင့်
 4. PHRASE SPACING: Put spaces between Burmese phrases and use "၊" and "။" so subtitles can break into clean single-line captions.
-5. Keep the exact same `index` for every segment."""
+5. Output ONLY valid JSON: {{"segments": [{{"index": 0, "narration": "..."}}], "tiktok_caption": "..."}}"""
 
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "segments": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "index": {"type": "INTEGER"},
-                        "narration": {"type": "STRING"},
-                    },
-                    "required": ["index", "narration"],
-                },
-            },
-            "tiktok_caption": {"type": "STRING"},
-        },
-        "required": ["segments", "tiktok_caption"],
-    }
-
+    # မော်ဒယ်နာမည် အဟောင်း/အသစ် အားလုံးကို အလုပ်လုပ်သော တရားဝင် Gemini Models သို့ ချိတ်ဆက်ပေးခြင်း
     preferred = gemini_model or DEFAULT_GEMINI_MODEL
-    if preferred in ("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"):
-        preferred = "gemini-3.8-flash"
+    if preferred in ("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-pro"):
+        preferred = "gemini-2.5-flash"
     models_to_try = [preferred] + [m for m in GEMINI_FALLBACK_MODELS if m != preferred]
 
     narr_map: Dict[int, str] = {}
     tiktok_cap = "ဇာတ်လမ်းကောင်းလေးကို အဆုံးထိ အားပေးကြပါဦးနော် 🎬"
-    batch_size = 35
 
-    async with httpx.AsyncClient(timeout=240.0) as client:
-        for b_start in range(0, len(segments), batch_size):
+    # Batch size 18 ဖြင့် ခွဲပို့ခြင်းကြောင့် 5:55 မိနစ် ဗီဒီယိုတွင်လည်း 4 စက္ကန့်အတွင်း မြန်ဆန်စွာ ပြန်ဖြေပေးနိုင်သည်
+    batch_size = 18
+    total_batches = max(1, (len(segments) + batch_size - 1) // batch_size)
+
+    # Request တစ်ခုချင်းစီကို 45 စက္ကန့်သာ အများဆုံးစောင့်ပြီး ကြာနေပါက နောက် Model သို့ ချက်ချင်းပြောင်းသည်
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        for batch_idx, b_start in enumerate(range(0, len(segments), batch_size), start=1):
+            if JOBS.get(job_id, {}).get("status") == "cancelled":
+                break
+
+            prog_pct = 38 + int((batch_idx / total_batches) * 12)
+            update_job_step(
+                job_id,
+                "translate",
+                min(50, prog_pct),
+                f"ဘာသာပြန်နေပါတယ် ({batch_idx}/{total_batches})...",
+            )
+
             batch = segments[b_start : b_start + batch_size]
             prompt_payload = [
                 {
@@ -570,49 +586,76 @@ STRICT BURMESE RULES:
                 }
                 for x in batch
             ]
+            user_json_str = json.dumps({"segments": prompt_payload}, ensure_ascii=False)
 
+            # responseSchema မထည့်ဘဲ responseMimeType: application/json သီးသန့်သုံးခြင်းဖြင့် 240s Hang လုံးဝမဖြစ်တော့ပါ
             body = {
                 "systemInstruction": {"parts": [{"text": system_instruction}]},
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [{"text": json.dumps({"segments": prompt_payload}, ensure_ascii=False)}],
-                    }
-                ],
+                "contents": [{"role": "user", "parts": [{"text": user_json_str}]}],
                 "generationConfig": {
                     "responseMimeType": "application/json",
-                    "responseSchema": response_schema,
                 },
             }
 
             parsed = None
             last_err = ""
+
+            # 1) Try Google Gemini Models
             for m_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key.strip()}"
-                res = await client.post(url, json=body)
-                if res.status_code == 200:
-                    data = res.json()
-                    try:
+                try:
+                    res = await client.post(url, json=body)
+                    if res.status_code == 200:
+                        data = res.json()
                         raw_txt = data["candidates"][0]["content"]["parts"][0]["text"]
-                        parsed = json.loads(raw_txt, strict=False)
+                        parsed = extract_json_safely(raw_txt)
                         break
-                    except Exception as parse_err:
-                        last_err = str(parse_err)
-                else:
-                    last_err = f"[{m_name}] {res.status_code}: {res.text}"
-                await asyncio.sleep(1.5)
+                    else:
+                        last_err = f"[{m_name}] HTTP {res.status_code}: {res.text[:200]}"
+                except Exception as req_err:
+                    err_detail = str(req_err).strip() or type(req_err).__name__
+                    last_err = f"[{m_name}] {err_detail}"
+                await asyncio.sleep(1.0)
+
+            # 2) Auto-Fallback to Groq (llama-3.3-70b-versatile) if Gemini times out or quota exceeded
+            if not parsed and groq_key:
+                try:
+                    groq_res = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {groq_key.strip()}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "llama-3.3-70b-versatile",
+                            "messages": [
+                                {"role": "system", "content": system_instruction},
+                                {"role": "user", "content": user_json_str},
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.3,
+                        },
+                    )
+                    if groq_res.status_code == 200:
+                        g_txt = groq_res.json()["choices"][0]["message"]["content"]
+                        parsed = extract_json_safely(g_txt)
+                    else:
+                        last_err += f" | Groq Fallback HTTP {groq_res.status_code}"
+                except Exception as g_err:
+                    last_err += f" | Groq Fallback {type(g_err).__name__}"
 
             if not parsed:
-                raise RuntimeError(f"Gemini API Error: {last_err}")
+                raise RuntimeError(f"Translate API Error: {last_err}")
 
             for item in parsed.get("segments", []):
-                raw_narr = item.get("narration", "")
-                if mode == "MM SRT SUBTITLE":
-                    narr_map[int(item["index"])] = format_srt_subtitle_lines(raw_narr)
-                else:
-                    narr_map[int(item["index"])] = clean_burmese_text(raw_narr)
+                if "index" in item and "narration" in item:
+                    raw_narr = str(item.get("narration", ""))
+                    if mode == "MM SRT SUBTITLE":
+                        narr_map[int(item["index"])] = format_srt_subtitle_lines(raw_narr)
+                    else:
+                        narr_map[int(item["index"])] = clean_burmese_text(raw_narr)
             if parsed.get("tiktok_caption"):
-                tiktok_cap = clean_burmese_text(parsed["tiktok_caption"])
+                tiktok_cap = clean_burmese_text(str(parsed["tiktok_caption"]))
 
     for seg in segments:
         seg["narration"] = narr_map.get(seg["index"]) or clean_burmese_text(seg["text"])
@@ -763,8 +806,10 @@ async def process_recap_pipeline(
         # 4. Translate / Storytelling Script
         update_job_step(job_id, "translate", 38, "ဘာသာပြန်နေပါတယ်")
         recap_data = await gemini_generate_recap(
+            job_id=job_id,
             segments=segments,
             gemini_key=gemini_key,
+            groq_key=groq_key,
             gemini_model=gemini_model,
             mode=mode,
             output_lang=cfg.get("output_language", "မြန်မာ"),
@@ -776,9 +821,7 @@ async def process_recap_pipeline(
         JOBS[job_id]["tiktok_caption"] = recap_data["tiktok_caption"]
         save_job_state(job_id)
 
-        # -----------------------------------------------------------------
-        # OPTION A: MM SRT SUBTITLE MODE (Instant .srt file output)
-        # -----------------------------------------------------------------
+        # OPTION A: MM SRT SUBTITLE MODE
         if mode == "MM SRT SUBTITLE":
             update_job_step(job_id, "timeline_captions", 85, "မြန်မာ .srt စာတန်းထိုးဖိုင် တည်ဆောက်နေပါတယ်...")
             srt_file = job_dir / "subtitles.srt"
@@ -791,9 +834,7 @@ async def process_recap_pipeline(
             append_job_log(job_id, "မြန်မာ .srt စာတန်းထိုးဖိုင် ထုတ်ပြီးပါပြီ!")
             return
 
-        # -----------------------------------------------------------------
-        # 5. Voice (4x Parallel Server TTS for AI Recap, Pro AI Recap & Voiceover Recap)
-        # -----------------------------------------------------------------
+        # 5. Voice (4x Parallel Server TTS)
         update_job_step(job_id, "voice", 52, "အသံထုတ်နေပါတယ် (Fast Parallel Server TTS)...")
         voice_short = cfg.get("voice_name", "Thiha")
         voice_id = VOICE_MAP.get(voice_short, "my-MM-ThihaNeural")
@@ -863,11 +904,7 @@ async def process_recap_pipeline(
         cap_width_pct = int(cfg.get("caption_width", 96))
         cap_text_size = int(cfg.get("text_size", 32))
 
-        # -----------------------------------------------------------------
         # 6. Timeline + captions
-        #    - Voiceover Recap Mode: Voiceover ပြောချိန် မူရင်းအသံကို ဖျောက်ထားပြီး (Mute)၊
-        #      Voiceover ရပ်သွားသည့် အက်ရှင်/ကြားကာလများတွင် မူရင်းအသံကို ပြန်ဖွင့်ပေးသည်!
-        # -----------------------------------------------------------------
         update_job_step(job_id, "timeline_captions", 72, "ရုပ်သံဖိုင်တွေ ဒေါင်းလုဒ် လုပ်နေပါတယ်...")
         caption_events = []
         concat_v_list: List[Path] = []
@@ -879,10 +916,6 @@ async def process_recap_pipeline(
         is_voiceover_recap = mode in ("Voiceover Recap", "Subtitle")
 
         async def extract_original_or_silent_audio(start_t: float, dur_t: float, target_dur: float, out_a: Path):
-            """
-            Voiceover Recap Mode တွင် စကားမပြောသည့် လိုအပ်သော အခန်းများ၌
-            မူရင်းဗီဒီယိုအသံကို Smooth Fade-in/Fade-out ဖြင့် ပြန်ဖွင့်ပေးခြင်း
-            """
             if is_voiceover_recap and video_has_audio and dur_t >= 0.35:
                 tempo = dur_t / max(0.2, target_dur)
                 tempo_clamped = max(0.5, min(2.0, tempo))
@@ -921,10 +954,8 @@ async def process_recap_pipeline(
             seg_start = max(prev_video_end, seg["start"])
             seg_end = max(seg_start + 0.4, seg["end"])
 
-            # 1) စကားမပြောသည့် ကြားကာလ (Gap) — Voiceover Recap တွင် မူရင်းအသံ ပြန်ပွင့်လာမည်
             gap_dur = seg_start - prev_video_end
             if gap_dur >= 0.4:
-                # Voiceover Recap တွင် မူရင်းအသံ သဘာဝကျစေရန် မူရင်းအမြန်နှုန်းနီးပါး (အများဆုံး 4.5s) ထားပေးသည်
                 if is_voiceover_recap:
                     target_gap_dur = min(4.5, max(0.4, gap_dur))
                 else:
@@ -951,11 +982,9 @@ async def process_recap_pipeline(
                 concat_a_list.append(a_gap)
                 timeline_cursor += target_gap_dur
 
-            # 2) Voiceover ပြောနေသည့် အပိုင်း — မူရင်းအသံကို လုံးဝဖျောက်ထားပြီး (-an) Voiceover အသံသီးသန့် ဖွင့်မည်
             orig_dur = max(0.4, seg_end - seg_start)
             tts_dur = seg["tts_duration"]
 
-            # Voiceover Recap တွင် မူရင်းအခန်းက Voiceover ထက် ပိုရှည်နေပါက ပိုနေသောအပိုင်းတွင် မူရင်းအသံ ပြန်ဖွင့်ပေးမည်
             if is_voiceover_recap and (orig_dur - tts_dur) >= 0.75:
                 speech_video_dur = tts_dur
                 leftover_dur = orig_dur - tts_dur
@@ -997,7 +1026,6 @@ async def process_recap_pipeline(
 
             timeline_cursor += tts_dur
 
-            # Voiceover ပြီးသွားပြီး အခန်းမဆုံးသေးပါက ကျန်သည့်အချိန်တွင် မူရင်းအသံ ပြန်ဖွင့်ပေးခြင်း
             if leftover_dur >= 0.75:
                 lo_start = seg_start + speech_video_dur
                 target_lo_dur = min(3.5, leftover_dur)
@@ -1024,7 +1052,6 @@ async def process_recap_pipeline(
 
             prev_video_end = seg_end
 
-        # ဗီဒီယို၏ နောက်ဆုံးကျန်ရှိသော အပိုင်း (Outro) ကိုလည်း Voiceover Recap တွင် မူရင်းအသံဖြင့် ထည့်ပေးခြင်း
         tail_dur = total_video_dur - prev_video_end
         if is_voiceover_recap and tail_dur >= 0.6:
             target_tail = min(4.0, tail_dur)
@@ -1074,7 +1101,7 @@ async def process_recap_pipeline(
         ass_path = job_dir / "captions.ass"
         build_ass_subtitles(caption_events, cfg, out_w, out_h, ass_path)
 
-        # 7. Render video (Smooth Gaussian Blur + Captions)
+        # 7. Render video
         update_job_step(
             job_id,
             "render_video",
@@ -1145,10 +1172,11 @@ async def process_recap_pipeline(
         append_job_log(job_id, "ဗီဒီယို ထုတ်လုပ်ပြီးပါပြီ! အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲနေပါတယ်...")
 
     except Exception as e:
+        err_text = str(e).strip() or f"{type(e).__name__}: {repr(e)}"
         if job_id in JOBS:
             JOBS[job_id]["status"] = "error"
-            JOBS[job_id]["error"] = str(e)
-            append_job_log(job_id, f"Error: {str(e)}")
+            JOBS[job_id]["error"] = err_text
+            append_job_log(job_id, f"Error: {err_text}")
 
 
 # -------------------------------------------------------------------------
