@@ -23,13 +23,13 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 # တရားဝင် အမြန်ဆုံး အလုပ်လုပ်သော Gemini Models စာရင်း
 GEMINI_FALLBACK_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-lite",
+    "gemini-3.8-flash",
 ]
 
 VOICE_MAP = {
